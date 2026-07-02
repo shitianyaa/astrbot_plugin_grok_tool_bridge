@@ -33,11 +33,11 @@ class DummyContext:
     ):
         del umo, conversation_persona_id, platform_name, provider_settings
         return (
-            "catgirl",
+            "friendly-helper",
             {
-                "prompt": "请像猫娘一样自然亲切地说话。",
+                "prompt": "请保持轻松亲切、自然体贴的语气。",
                 "_begin_dialogs_processed": [
-                    {"role": "assistant", "content": "喵，早上好。"}
+                    {"role": "assistant", "content": "早上好，今天也一起加油。"}
                 ],
             },
             None,
@@ -235,7 +235,7 @@ def test_build_proactive_context_includes_persona_and_history(
     event = FakeEvent({}, message="叫醒我", session="aiocqhttp:private:test")
     conversation = SimpleNamespace(
         history='[{"role":"user","content":"昨晚记得提醒我早睡"}]',
-        persona_id="catgirl",
+        persona_id="friendly-helper",
     )
 
     async def fake_get_session_conv(event, plugin_context):
@@ -244,11 +244,16 @@ def test_build_proactive_context_includes_persona_and_history(
 
     monkeypatch.setattr("core.bridge_service._get_session_conv", fake_get_session_conv)
 
-    contexts, system_prompt = asyncio.run(service._build_proactive_context(event))
+    contexts, system_prompt = asyncio.run(
+        service._build_proactive_context(
+            event,
+            config=service.config_manager.config,
+        )
+    )
 
-    assert contexts[0]["content"] == "喵，早上好。"
+    assert contexts[0]["content"] == "早上好，今天也一起加油。"
     assert contexts[1]["content"] == "昨晚记得提醒我早睡"
-    assert "猫娘" in system_prompt
+    assert "轻松亲切" in system_prompt
 
 
 def test_handle_file_message_auto_processes_file_only_message(

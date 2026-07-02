@@ -24,7 +24,9 @@ _DAILY_RE = re.compile(
 )
 
 
-def infer_future_task_schedule(message: str, *, now: datetime) -> ParsedFutureSchedule | None:
+def infer_future_task_schedule(
+    message: str, *, now: datetime
+) -> ParsedFutureSchedule | None:
     text = " ".join(str(message or "").split())
     if not text:
         return None

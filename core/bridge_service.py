@@ -319,7 +319,10 @@ class GrokToolBridgeService:
             payload=json.dumps(payload["data"], ensure_ascii=False),
             message=str(payload.get("message") or ""),
         )
-        contexts, system_prompt = await self._build_proactive_context(event)
+        contexts, system_prompt = await self._build_proactive_context(
+            event,
+            config=config,
+        )
         try:
             logger.info(
                 "GrokToolBridge proactive agent started; provider_id=%s tools=%s "
@@ -674,6 +677,8 @@ class GrokToolBridgeService:
     async def _build_proactive_context(
         self,
         event: Any,
+        *,
+        config: PluginConfig,
     ) -> tuple[list[dict[str, Any]], str]:
         system_parts = [PROACTIVE_AGENT_SYSTEM_PROMPT]
         contexts: list[dict[str, Any]] = []
@@ -701,6 +706,23 @@ class GrokToolBridgeService:
                 contexts = begin_dialogs + contexts
             if persona_prompt:
                 system_parts.append(f"# Persona Instructions\n\n{persona_prompt}")
+
+            self._debug_log(
+                config,
+                "GrokToolBridge proactive context prepared; session=%s persona_id=%s "
+                "persona_prompt=%s begin_dialogs=%s history_items=%s",
+                self._event_session(event),
+                getattr(conversation, "persona_id", "") or "(none)",
+                self._short_text(persona_prompt or "(none)"),
+                len(begin_dialogs),
+                len(history),
+            )
+        else:
+            self._debug_log(
+                config,
+                "GrokToolBridge proactive context prepared; session=%s no conversation",
+                self._event_session(event),
+            )
 
         return contexts, "\n\n".join(part for part in system_parts if part.strip())
 
