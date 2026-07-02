@@ -99,6 +99,23 @@ def infer_future_task_schedule(
     return None
 
 
+def extract_future_task_instruction(message: str) -> str:
+    text = " ".join(str(message or "").split())
+    if not text:
+        return ""
+
+    match = _find_schedule_match(text)
+    if match is None:
+        return text
+
+    start, end = match.span()
+    trimmed = (text[:start] + " " + text[end:]).strip()
+    trimmed = re.sub(r"^[,，。；;:：、\s]+", "", trimmed)
+    trimmed = re.sub(r"[,，。；;:：、\s]+$", "", trimmed)
+    trimmed = re.sub(r"\s{2,}", " ", trimmed)
+    return trimmed or text
+
+
 def _normalize_hour(hour: int, *, period: str) -> int:
     if period in {"下午", "晚上"} and 1 <= hour <= 11:
         return hour + 12
@@ -111,6 +128,25 @@ def _normalize_hour(hour: int, *, period: str) -> int:
 
 def _extract_minute(colon_minute: str | None, dotted_minute: str | None) -> int:
     return int(colon_minute or dotted_minute or 0)
+
+
+def _find_schedule_match(text: str) -> re.Match[str] | None:
+    for pattern in (
+        _MINUTES_LATER_RE,
+        _HOURS_LATER_RE,
+        _DAILY_RE,
+        _TIME_OF_DAY_RE,
+    ):
+        match = pattern.search(text)
+        if match is None:
+            continue
+        period = ""
+        if pattern in {_DAILY_RE, _TIME_OF_DAY_RE}:
+            period = (match.group(2) or "").strip()
+            if not _has_time_context(match.group(0), period=period):
+                continue
+        return match
+    return None
 
 
 def _has_time_context(matched_text: str, *, period: str) -> bool:

@@ -93,3 +93,25 @@ Trigger message:
 {message}
 
 Proceed with the task now."""
+
+
+FUTURE_TASK_NOTE_SYSTEM_PROMPT = """You rewrite a user's reminder or scheduled-task
+request into the execution instruction that a future assistant should follow
+when the task wakes up.
+
+Rules:
+- Remove scheduling expressions such as "1 minute later", "tomorrow at 7am",
+  "every day", cron-like timing, and other trigger-time wording.
+- Preserve the real task requirement, tone, constraints, reminders, and style.
+- Keep useful detail. Do not over-shorten the instruction.
+- Do not explain your reasoning.
+- Output only the final task instruction text."""
+
+
+FUTURE_TASK_NOTE_USER_TEMPLATE = """Original user message:
+{message}
+
+Rule-based extracted draft:
+{draft}
+
+Write the final execution instruction only."""

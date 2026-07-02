@@ -16,12 +16,17 @@ class DummyContext:
         self.persona_manager = SimpleNamespace(
             resolve_selected_persona=self._resolve_selected_persona
         )
+        self.llm_response_text = ""
 
     def get_config(self, umo=None):
         return {"provider_settings": {}}
 
     def get_provider_by_id(self, provider_id):
         return {"id": provider_id} if provider_id else None
+
+    async def llm_generate(self, **kwargs):
+        del kwargs
+        return SimpleNamespace(completion_text=self.llm_response_text)
 
     async def _resolve_selected_persona(
         self,
@@ -140,7 +145,8 @@ def test_future_task_decision_preserves_full_note_and_derives_name():
         message,
     )
 
-    assert normalized.args["note"] == message
+    assert "轻松可爱的方式" in normalized.args["note"]
+    assert "每天换换花样" in normalized.args["note"]
     assert normalized.args["name"] != "提醒"
     assert normalized.args["name"]
 
@@ -163,7 +169,61 @@ def test_future_task_create_overrides_short_router_note_with_full_message():
         message,
     )
 
-    assert normalized.args["note"] == message
+    assert normalized.args["note"] != "早上7点叫醒老大"
+    assert "轻松可爱的方式" in normalized.args["note"]
+    assert "不要重复" in normalized.args["note"]
+
+
+def test_future_task_create_uses_execution_instruction_not_raw_schedule_message():
+    decision = ToolDecision(
+        action="tool_call",
+        tool="future_task",
+        args={"action": "create", "name": "提醒"},
+        confidence=0.9,
+        reason="schedule",
+    )
+
+    normalized = GrokToolBridgeService._normalize_future_task_decision(
+        decision,
+        "1分钟后向我问好",
+    )
+
+    assert normalized.args["note"] == "向我问好"
+    assert normalized.args["run_at"] != ""
+
+
+def test_rewrite_future_task_decision_note_uses_model_output(tmp_path: Path):
+    context = DummyContext()
+    context.llm_response_text = "请主动向我问好，语气自然一点。"
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    decision = ToolDecision(
+        action="tool_call",
+        tool="future_task",
+        args={
+            "action": "create",
+            "name": "问好提醒",
+            "note": "向我问好",
+            "run_once": True,
+            "run_at": "2026-07-02T15:44:29+08:00",
+        },
+        confidence=0.9,
+        reason="schedule",
+    )
+
+    rewritten = asyncio.run(
+        service._rewrite_future_task_decision_note(
+            decision=decision,
+            original_message="1分钟后向我问好，语气自然一点。",
+            provider_id="router",
+            config=service.config_manager.config,
+        )
+    )
+
+    assert rewritten.args["note"] == "请主动向我问好，语气自然一点。"
 
 
 def test_prepare_bridge_message_uses_recent_uploaded_file(tmp_path: Path):

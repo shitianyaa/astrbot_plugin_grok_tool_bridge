@@ -17,12 +17,14 @@ from .provider_matcher import is_target_provider
 from .prompts import (
     FINAL_SYSTEM_PROMPT,
     FINAL_USER_TEMPLATE,
+    FUTURE_TASK_NOTE_SYSTEM_PROMPT,
+    FUTURE_TASK_NOTE_USER_TEMPLATE,
     PROACTIVE_AGENT_SYSTEM_PROMPT,
     PROACTIVE_AGENT_USER_TEMPLATE,
 )
 from .recent_file_store import CachedSessionFile, RecentFileStore
 from .router import ToolDecision, ToolRouter
-from .time_parser import infer_future_task_schedule
+from .time_parser import extract_future_task_instruction, infer_future_task_schedule
 from .tool_executor import BuiltinToolExecutor, ToolExecutionResult
 from .tool_policy import ToolPolicy
 
@@ -489,6 +491,12 @@ class GrokToolBridgeService:
                 now=datetime.now().astimezone(),
             )
             decision = self._normalize_future_task_decision(decision, message)
+            decision = await self._rewrite_future_task_decision_note(
+                decision=decision,
+                original_message=message,
+                provider_id=router_provider_id,
+                config=config,
+            )
             decisions.append(decision)
             self._debug_log(
                 config,
@@ -869,9 +877,10 @@ class GrokToolBridgeService:
 
         args = dict(decision.args)
         original_message = cls._collapse_whitespace(message)
+        execution_message = extract_future_task_instruction(original_message)
         note = str(args.get("note") or "").strip()
         if action == "create":
-            args["note"] = original_message or note
+            args["note"] = execution_message or original_message or note
             schedule = infer_future_task_schedule(
                 original_message,
                 now=datetime.now().astimezone(),
@@ -889,8 +898,70 @@ class GrokToolBridgeService:
 
         name = str(args.get("name") or "").strip()
         if action == "create" and (not name or name.lower() in _GENERIC_TASK_NAMES):
-            args["name"] = cls._suggest_future_task_name(args.get("note") or message)
+            args["name"] = cls._suggest_future_task_name(
+                execution_message or args.get("note") or message
+            )
 
+        return ToolDecision(
+            action=decision.action,
+            tool=decision.tool,
+            args=args,
+            confidence=decision.confidence,
+            reason=decision.reason,
+        )
+
+    async def _rewrite_future_task_decision_note(
+        self,
+        *,
+        decision: ToolDecision,
+        original_message: str,
+        provider_id: str,
+        config: PluginConfig,
+    ) -> ToolDecision:
+        if decision.tool != "future_task" or not decision.args:
+            return decision
+
+        action = str(decision.args.get("action") or "").strip().lower()
+        if action != "create":
+            return decision
+
+        args = dict(decision.args)
+        fallback_note = str(args.get("note") or "").strip()
+        if not fallback_note:
+            return decision
+
+        prompt = FUTURE_TASK_NOTE_USER_TEMPLATE.format(
+            message=original_message,
+            draft=fallback_note,
+        )
+        try:
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=FUTURE_TASK_NOTE_SYSTEM_PROMPT,
+            )
+        except Exception as exc:
+            self._debug_log(
+                config,
+                "GrokToolBridge future_task note rewrite failed; provider_id=%s error=%s",
+                provider_id,
+                exc,
+            )
+            return decision
+
+        rewritten_note = str(getattr(response, "completion_text", "") or "").strip()
+        rewritten_note = self._strip_wrapped_text(rewritten_note)
+        if not rewritten_note:
+            return decision
+
+        args["note"] = rewritten_note
+        self._debug_log(
+            config,
+            "GrokToolBridge future_task note rewritten; provider_id=%s before=%s after=%s",
+            provider_id,
+            self._short_text(fallback_note, limit=200),
+            self._short_text(rewritten_note, limit=200),
+        )
         return ToolDecision(
             action=decision.action,
             tool=decision.tool,
@@ -1009,6 +1080,15 @@ class GrokToolBridgeService:
         if len(cleaned) <= limit:
             return cleaned
         return cleaned[:limit] + "..."
+
+    @staticmethod
+    def _strip_wrapped_text(text: str) -> str:
+        cleaned = str(text or "").strip()
+        if cleaned.startswith("```") and cleaned.endswith("```"):
+            lines = cleaned.splitlines()
+            if len(lines) >= 3:
+                cleaned = "\n".join(lines[1:-1]).strip()
+        return cleaned.strip("` \n")
 
     @staticmethod
     def _json_preview(payload: Any, limit: int = 240) -> str:
