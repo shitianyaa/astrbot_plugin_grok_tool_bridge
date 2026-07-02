@@ -284,9 +284,7 @@ def test_handle_file_message_auto_processes_file_only_message(
     assert reply == "summary"
 
 
-def test_run_bridge_stops_after_future_task_create(
-    tmp_path: Path, monkeypatch
-):
+def test_run_bridge_stops_after_future_task_create(tmp_path: Path, monkeypatch):
     service = GrokToolBridgeService(
         context=DummyContext(),
         config_manager=ConfigManager({}),
@@ -299,14 +297,22 @@ def test_run_bridge_stops_after_future_task_create(
             ToolDecision(
                 action="tool_call",
                 tool="future_task",
-                args={"action": "create", "name": "叫醒服务", "note": "明天早上7点叫我起床"},
+                args={
+                    "action": "create",
+                    "name": "叫醒服务",
+                    "note": "明天早上7点叫我起床",
+                },
                 confidence=0.9,
                 reason="schedule",
             ),
             ToolDecision(
                 action="tool_call",
                 tool="future_task",
-                args={"action": "create", "name": "叫醒服务", "note": "明天早上7点叫我起床"},
+                args={
+                    "action": "create",
+                    "name": "叫醒服务",
+                    "note": "明天早上7点叫我起床",
+                },
                 confidence=0.9,
                 reason="schedule again",
             ),

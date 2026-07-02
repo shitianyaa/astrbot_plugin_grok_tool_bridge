@@ -22,6 +22,7 @@ from .prompts import (
 )
 from .recent_file_store import CachedSessionFile, RecentFileStore
 from .router import ToolDecision, ToolRouter
+from .time_parser import infer_future_task_schedule
 from .tool_executor import BuiltinToolExecutor, ToolExecutionResult
 from .tool_policy import ToolPolicy
 
@@ -100,6 +101,13 @@ class GrokToolBridgeService:
             f"请读取并总结我刚上传的文件 {current_file.file_name}。",
             current_file,
             source="current_message_attachment",
+        )
+        self._debug_log(
+            config,
+            "GrokToolBridge auto file bridge start; session=%s provider_id=%s file=%s",
+            self._event_session(event),
+            provider_id,
+            current_file.file_name,
         )
         result = await self.run_bridge(
             event=event,
@@ -267,6 +275,12 @@ class GrokToolBridgeService:
         if not message:
             return "请在命令后写明需要处理的内容，例如：/grok工具 明天早上 9 点提醒我交日报"
 
+        self._debug_log(
+            config,
+            "GrokToolBridge manual bridge start; session=%s message=%s",
+            self._event_session(event),
+            self._short_text(message),
+        )
         result = await self.run_bridge(
             event=event,
             message=message,
@@ -401,6 +415,22 @@ class GrokToolBridgeService:
                 reason="没有可用的路由模型 Provider。",
             )
 
+        self._debug_log(
+            config,
+            "GrokToolBridge bridge started; session=%s manual=%s current_provider_id=%s "
+            "router_provider_id=%s final_provider_id=%s allowed_tools=%s max_steps=%s "
+            "confidence_threshold=%.2f timeout=%s message=%s",
+            self._event_session(event),
+            manual,
+            provider_id,
+            router_provider_id,
+            config.final_provider_id or provider_id,
+            allowed_tools,
+            config.max_steps,
+            config.confidence_threshold,
+            config.tool_call_timeout,
+            self._short_text(message),
+        )
         event.set_extra(BRIDGE_ACTIVE_EXTRA, True)
         try:
             return await self._run_bridge_inner(
@@ -436,8 +466,18 @@ class GrokToolBridgeService:
         executor = BuiltinToolExecutor(self.context, policy)
         decisions: list[ToolDecision] = []
         tool_results: list[ToolExecutionResult] = []
+        session = self._event_session(event)
 
-        for _ in range(config.max_steps):
+        for step_index in range(1, config.max_steps + 1):
+            self._debug_log(
+                config,
+                "GrokToolBridge step=%s router request; session=%s router_provider_id=%s "
+                "tool_results=%s",
+                step_index,
+                session,
+                router_provider_id,
+                len(tool_results),
+            )
             decision = await router.decide(
                 provider_id=router_provider_id,
                 message=message,
@@ -447,10 +487,35 @@ class GrokToolBridgeService:
             )
             decision = self._normalize_future_task_decision(decision, message)
             decisions.append(decision)
+            self._debug_log(
+                config,
+                "GrokToolBridge step=%s router decision; session=%s action=%s tool=%s "
+                "confidence=%.2f reason=%s args=%s",
+                step_index,
+                session,
+                decision.action,
+                decision.tool or "(none)",
+                decision.confidence,
+                decision.reason or "(none)",
+                self._json_preview(decision.args),
+            )
 
             if not decision.wants_tool:
                 if tool_results:
+                    self._debug_log(
+                        config,
+                        "GrokToolBridge step=%s finalize after router stop; session=%s",
+                        step_index,
+                        session,
+                    )
                     break
+                self._debug_log(
+                    config,
+                    "GrokToolBridge step=%s no tool selected; session=%s reason=%s",
+                    step_index,
+                    session,
+                    decision.reason or "router decided no_tool",
+                )
                 return BridgeRunResult(
                     handled=False,
                     decisions=decisions,
@@ -458,6 +523,15 @@ class GrokToolBridgeService:
                 )
 
             if decision.confidence < config.confidence_threshold and not manual:
+                self._debug_log(
+                    config,
+                    "GrokToolBridge step=%s skipped by confidence; session=%s "
+                    "confidence=%.2f threshold=%.2f",
+                    step_index,
+                    session,
+                    decision.confidence,
+                    config.confidence_threshold,
+                )
                 return BridgeRunResult(
                     handled=False,
                     decisions=decisions,
@@ -467,6 +541,14 @@ class GrokToolBridgeService:
                 )
 
             if not policy.is_allowed(decision.tool, allowed_tools):
+                self._debug_log(
+                    config,
+                    "GrokToolBridge step=%s rejected tool; session=%s tool=%s allowed=%s",
+                    step_index,
+                    session,
+                    decision.tool,
+                    allowed_tools,
+                )
                 return BridgeRunResult(
                     handled=manual,
                     reply=f"工具 `{decision.tool}` 不在当前白名单中，已拒绝调用。",
@@ -474,6 +556,15 @@ class GrokToolBridgeService:
                     reason="tool not allowed",
                 )
 
+            self._debug_log(
+                config,
+                "GrokToolBridge step=%s tool execute; session=%s tool=%s timeout=%s args=%s",
+                step_index,
+                session,
+                decision.tool,
+                config.tool_call_timeout,
+                self._json_preview(decision.args),
+            )
             tool_result = await executor.execute(
                 event=event,
                 tool_name=decision.tool,
@@ -482,9 +573,35 @@ class GrokToolBridgeService:
                 timeout=config.tool_call_timeout,
             )
             tool_results.append(tool_result)
+            self._debug_log(
+                config,
+                "GrokToolBridge step=%s tool result; session=%s tool=%s ok=%s "
+                "direct_message_sent=%s content=%s",
+                step_index,
+                session,
+                tool_result.tool,
+                tool_result.ok,
+                tool_result.direct_message_sent,
+                self._short_text(tool_result.content, limit=240),
+            )
             if not tool_result.ok:
+                self._debug_log(
+                    config,
+                    "GrokToolBridge step=%s finalize after tool failure; session=%s tool=%s",
+                    step_index,
+                    session,
+                    tool_result.tool,
+                )
                 break
             if self._should_finalize_after_tool(decision, tool_result):
+                self._debug_log(
+                    config,
+                    "GrokToolBridge step=%s finalize after tool; session=%s tool=%s action=%s",
+                    step_index,
+                    session,
+                    decision.tool,
+                    decision.args.get("action"),
+                )
                 break
 
         if not tool_results:
@@ -500,6 +617,14 @@ class GrokToolBridgeService:
             current_provider_id=current_provider_id,
             final_provider_id=config.final_provider_id,
             req=req,
+            config=config,
+        )
+        self._debug_log(
+            config,
+            "GrokToolBridge bridge finished; session=%s tools=%s reply=%s",
+            session,
+            [tool_result.tool for tool_result in tool_results],
+            self._short_text(reply, limit=240),
         )
         return BridgeRunResult(
             handled=True,
@@ -516,11 +641,18 @@ class GrokToolBridgeService:
         current_provider_id: str,
         final_provider_id: str,
         req: Any | None,
+        config: PluginConfig,
     ) -> str:
         provider_id = final_provider_id or current_provider_id
         if not provider_id:
             return self._fallback_reply(tool_results)
 
+        self._debug_log(
+            config,
+            "GrokToolBridge final reply request; provider_id=%s tool_results=%s",
+            provider_id,
+            len(tool_results),
+        )
         prompt = FINAL_USER_TEMPLATE.format(
             message=message,
             tool_results=self._format_tool_results(tool_results),
@@ -718,6 +850,18 @@ class GrokToolBridgeService:
         note = str(args.get("note") or "").strip()
         if action == "create":
             args["note"] = original_message or note
+            schedule = infer_future_task_schedule(
+                original_message,
+                now=datetime.now().astimezone(),
+            )
+            if schedule is not None:
+                args["run_once"] = schedule.run_once
+                if schedule.run_at:
+                    args["run_at"] = schedule.run_at
+                    args.pop("cron_expression", None)
+                if schedule.cron_expression:
+                    args["cron_expression"] = schedule.cron_expression
+                    args.pop("run_at", None)
         elif not note:
             args["note"] = original_message
 
@@ -843,6 +987,20 @@ class GrokToolBridgeService:
         if len(cleaned) <= limit:
             return cleaned
         return cleaned[:limit] + "..."
+
+    @staticmethod
+    def _json_preview(payload: Any, limit: int = 240) -> str:
+        try:
+            rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            rendered = str(payload)
+        return GrokToolBridgeService._short_text(rendered, limit=limit)
+
+    @staticmethod
+    def _debug_log(config: PluginConfig, message: str, *args: Any) -> None:
+        if not config.debug_mode:
+            return
+        logger.info(message, *args)
 
     @staticmethod
     def _request_message(event: Any, req: Any) -> str:

@@ -83,7 +83,11 @@ class ToolRouter:
                 system_prompt=ROUTER_SYSTEM_PROMPT,
             )
         except Exception as exc:
-            logger.warning("GrokToolBridge router provider call failed: %s", exc)
+            logger.warning(
+                "GrokToolBridge router provider call failed; provider_id=%s error=%s",
+                provider_id,
+                exc,
+            )
             return ToolDecision(reason=f"router call failed: {exc}")
 
         text = str(getattr(response, "completion_text", "") or "")

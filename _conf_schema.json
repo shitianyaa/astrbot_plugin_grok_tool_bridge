@@ -216,6 +216,6 @@
     "description": "调试模式",
     "type": "bool",
     "default": false,
-    "hint": "预留调试开关，后续可用于输出更详细的路由和工具调用日志。"
+    "hint": "开启后会输出更详细的桥接流程日志，包括当前会话 Provider、路由 Provider、最终回复 Provider、step 序号、router 决策、tool 入参与执行结果预览。"
   }
 }

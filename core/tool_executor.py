@@ -83,7 +83,12 @@ class BuiltinToolExecutor:
                     continue
                 pieces.extend(self._stringify_tool_response(response))
         except Exception as exc:
-            logger.warning("GrokToolBridge tool execution failed: %s", exc)
+            logger.warning(
+                "GrokToolBridge tool execution failed; tool=%s args=%s error=%s",
+                tool_name,
+                args,
+                exc,
+            )
             return ToolExecutionResult(
                 tool=tool_name,
                 args=args,

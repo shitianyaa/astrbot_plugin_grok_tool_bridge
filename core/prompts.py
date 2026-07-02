@@ -21,6 +21,9 @@ Decision rules:
   - `note` must preserve the user's full execution requirements, tone, conditions, reminders, and formatting constraints.
   - Do not compress a long wake-up/reminder instruction into a vague one-liner if the user provided rich details.
   - Prefer run_once=true + run_at for one-time schedules, and cron_expression for recurring schedules.
+  - `run_at` must be a concrete future ISO datetime with timezone, not the current timestamp and not a past time.
+  - Relative times like "1分钟后" must be converted into a future absolute `run_at`.
+  - Daily repeated reminders like "每天早上7点" should use `cron_expression` instead of a one-time `run_at`.
 - If the message mentions a current uploaded file or the most recent uploaded file in session context, prefer using the provided file path with astrbot_file_read_tool or astrbot_grep_tool.
 
 Return only one JSON object:

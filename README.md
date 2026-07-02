@@ -80,6 +80,7 @@
 - `recent_file_bridge_enabled`：是否缓存最近一个聊天文件附件，并支持后续“刚才的文件”式引用。
 - `recent_file_allowed_extensions` / `recent_file_max_size_kb`：限制会被缓存的聊天文件类型和大小。
 - `auto_process_uploaded_text_file`：是否在用户单独发送文件时立刻自动总结；默认关闭，避免误触发。该模式仍会遵守 `target_provider_keywords` 的 provider 匹配。
+- `debug_mode`：开启后会输出详细桥接日志，能看到 `session`、当前/路由/最终使用的 Provider、`step` 序号、router 决策、tool 参数和结果预览，适合在 AstrBot 里排查“为什么没触发/为什么触发错了”。
 
 ## 工作流程
 
