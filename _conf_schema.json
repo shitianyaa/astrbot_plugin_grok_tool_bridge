@@ -1,0 +1,221 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不会进行自动桥接，也不会响应手动命令。"
+  },
+  "auto_mode": {
+    "description": "自动桥接 Grok 请求",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，在 AstrBot 准备调用目标 Grok/xAI 模型前，插件会先判断是否需要调用白名单工具。"
+  },
+  "proactive_mode": {
+    "description": "接管未来任务到点执行",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，future_task 到点唤醒的 Cron 事件和后台任务结果会交给工具执行助手模型处理，避免 Grok 因不能调用 send_message_to_user 而无法通知用户。"
+  },
+  "manual_command_enabled": {
+    "description": "启用手动命令",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可使用 /grok工具、/groktool 或 /工具桥接 手动触发桥接。"
+  },
+  "target_provider_keywords": {
+    "description": "目标 Provider 关键词",
+    "type": "list",
+    "default": [
+      "grok",
+      "xai"
+    ],
+    "hint": "仅当当前会话 Provider ID、模型名或配置中包含这些关键词时自动桥接；留空表示所有 Provider 都可自动桥接。"
+  },
+  "router_provider_id": {
+    "description": "工具路由 Provider",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于判断是否需要工具并输出 JSON。建议选择 gpt-oss-120b 一类稳定遵循 JSON 的模型；留空使用当前会话模型。"
+  },
+  "final_provider_id": {
+    "description": "最终回复 Provider",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于根据工具结果生成最终回复；留空使用当前会话模型，通常也就是 Grok。"
+  },
+  "proactive_agent_provider_id": {
+    "description": "主动任务执行助手 Provider",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "用于执行 future_task 到点后的主动任务。必须选择一个稳定支持 tools/function calling 的模型；留空时插件不会接管主动任务，并会在日志中输出警告。"
+  },
+  "confidence_threshold": {
+    "description": "自动触发置信度阈值",
+    "type": "float",
+    "default": 0.65,
+    "slider": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "hint": "自动模式下，路由模型给出的 confidence 低于该值时不接管默认 Grok 回复。手动命令不受该阈值限制。"
+  },
+  "max_steps": {
+    "description": "最大工具轮数",
+    "type": "int",
+    "default": 3,
+    "slider": {
+      "min": 1,
+      "max": 10,
+      "step": 1
+    },
+    "hint": "一次消息最多允许路由并执行多少轮工具。普通场景 1-3 轮即可。"
+  },
+  "tool_call_timeout": {
+    "description": "单次工具超时秒数",
+    "type": "int",
+    "default": 60,
+    "slider": {
+      "min": 5,
+      "max": 3600,
+      "step": 5
+    },
+    "hint": "单个 AstrBot 内置工具的执行超时时间。"
+  },
+  "enabled_auto_tools": {
+    "description": "自动模式工具白名单",
+    "type": "list",
+    "options": [
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool",
+      "send_message_to_user",
+      "astrbot_upload_file",
+      "astrbot_download_file"
+    ],
+    "default": [
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool"
+    ],
+    "hint": "自动桥接只允许调用这里列出的工具。建议不要默认开放 send_message_to_user、upload、download。"
+  },
+  "enabled_manual_tools": {
+    "description": "手动命令工具白名单",
+    "type": "list",
+    "options": [
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool",
+      "send_message_to_user",
+      "astrbot_upload_file",
+      "astrbot_download_file"
+    ],
+    "default": [
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool",
+      "send_message_to_user",
+      "astrbot_upload_file",
+      "astrbot_download_file"
+    ],
+    "hint": "手动命令 /grok工具 可调用的工具范围。"
+  },
+  "enabled_proactive_tools": {
+    "description": "主动任务执行工具白名单",
+    "type": "list",
+    "options": [
+      "send_message_to_user",
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool",
+      "astrbot_upload_file",
+      "astrbot_download_file"
+    ],
+    "default": [
+      "send_message_to_user",
+      "future_task",
+      "astr_kb_search",
+      "astrbot_file_read_tool",
+      "astrbot_grep_tool"
+    ],
+    "hint": "future_task 到点后，工具执行助手可调用的工具范围。send_message_to_user 用于主动通知原会话，建议保留。"
+  },
+  "recent_file_bridge_enabled": {
+    "description": "启用最近上传文件桥接",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，会缓存当前会话最近一个白名单文本文件，便于后续通过“总结刚才的文件”之类的自然语言触发 astrbot_file_read_tool。"
+  },
+  "recent_file_ttl_seconds": {
+    "description": "最近文件缓存生存时间（秒）",
+    "type": "int",
+    "default": 1800,
+    "slider": {
+      "min": 60,
+      "max": 86400,
+      "step": 60
+    },
+    "hint": "最近上传文件在会话级缓存中保留多久。超时后，需要重新发送文件或重新上传。"
+  },
+  "recent_file_max_size_kb": {
+    "description": "最近文件最大大小（KB）",
+    "type": "int",
+    "default": 2048,
+    "slider": {
+      "min": 64,
+      "max": 10240,
+      "step": 64
+    },
+    "hint": "超过该大小的聊天文件附件不会被缓存到最近文件桥接上下文。"
+  },
+  "recent_file_allowed_extensions": {
+    "description": "最近文件允许后缀",
+    "type": "list",
+    "default": [
+      ".txt",
+      ".md",
+      ".markdown",
+      ".log",
+      ".json",
+      ".yaml",
+      ".yml",
+      ".ini",
+      ".cfg",
+      ".toml",
+      ".csv",
+      ".tsv",
+      ".pdf",
+      ".docx",
+      ".epub"
+    ],
+    "hint": "只有这些后缀的聊天文件附件才会被缓存并参与“刚才的文件”桥接。"
+  },
+  "auto_process_uploaded_text_file": {
+    "description": "单独发送文件时自动总结",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时，单独发送文件只会缓存最近文件，不会自动触发总结；开启后，文件消息会直接生成“读取并总结刚上传文件”的桥接请求。"
+  },
+  "send_progress_message": {
+    "description": "发送处理中提示",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，自动桥接接管并完成工具调用后会先发送一条整理结果提示。通常保持关闭，减少聊天噪声。"
+  },
+  "debug_mode": {
+    "description": "调试模式",
+    "type": "bool",
+    "default": false,
+    "hint": "预留调试开关，后续可用于输出更详细的路由和工具调用日志。"
+  }
+}
