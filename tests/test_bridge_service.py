@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from astrbot.core.message.components import File
 
@@ -17,6 +18,8 @@ class DummyContext:
             resolve_selected_persona=self._resolve_selected_persona
         )
         self.llm_response_text = ""
+        self.llm_calls: list[dict] = []
+        self.tool_loop_calls: list[dict] = []
 
     def get_config(self, umo=None):
         return {"provider_settings": {}}
@@ -24,9 +27,16 @@ class DummyContext:
     def get_provider_by_id(self, provider_id):
         return {"id": provider_id} if provider_id else None
 
+    def get_llm_tool_manager(self):
+        return None
+
     async def llm_generate(self, **kwargs):
-        del kwargs
+        self.llm_calls.append(kwargs)
         return SimpleNamespace(completion_text=self.llm_response_text)
+
+    async def tool_loop_agent(self, **kwargs):
+        self.tool_loop_calls.append(kwargs)
+        return SimpleNamespace(completion_text="")
 
     async def _resolve_selected_persona(
         self,
@@ -64,6 +74,7 @@ class FakeEvent:
         self.unified_msg_origin = session
         self.message_obj = SimpleNamespace(message=components or [])
         self.stopped = False
+        self.sent_messages: list[Any] = []
 
     def get_extra(self, key, default=None):
         return self.extras.get(key, default)
@@ -76,6 +87,9 @@ class FakeEvent:
 
     def stop_event(self):
         self.stopped = True
+
+    async def send(self, message_chain):
+        self.sent_messages.append(message_chain)
 
 
 def test_proactive_payload_detects_cron_job():
@@ -125,6 +139,161 @@ def test_proactive_provider_uses_explicit_provider(tmp_path: Path):
     )
 
     assert service._proactive_provider_id(service.config_manager.config) == "tool-agent"
+
+
+def test_select_proactive_execution_mode_prefers_grok_for_realtime_info():
+    payload = {
+        "kind": "cron_job",
+        "data": {"note": "给我推送成都市温江区明天的天气和注意事项"},
+        "message": "三分钟后给我推送成都市温江区明天的天气和注意事项",
+    }
+
+    assert (
+        GrokToolBridgeService._select_proactive_execution_mode(payload) == "grok_first"
+    )
+
+
+def test_select_proactive_execution_mode_prefers_tools_for_file_tasks():
+    payload = {
+        "kind": "cron_job",
+        "data": {"note": "读取我刚上传的文件并总结"},
+        "message": "十分钟后读取我刚上传的文件并总结",
+    }
+
+    assert (
+        GrokToolBridgeService._select_proactive_execution_mode(payload) == "tool_first"
+    )
+
+
+def test_build_proactive_source_text_reuses_recent_file_context(tmp_path: Path):
+    source = tmp_path / "note.md"
+    source.write_text("# hello\nworld\n", encoding="utf-8")
+    component = File(name="note.md", file=str(source))
+    file_event = FakeEvent({}, message="", components=[component])
+    proactive_event = FakeEvent({}, message="十分钟后总结我刚上传的文件")
+    service = GrokToolBridgeService(
+        context=DummyContext(),
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+
+    asyncio.run(service.capture_recent_files(file_event))
+    source_text = service._build_proactive_source_text(
+        event=proactive_event,
+        payload={
+            "kind": "cron_job",
+            "data": {"note": "总结我刚上传的文件"},
+            "message": "十分钟后总结我刚上传的文件",
+        },
+        config=service.config_manager.config,
+    )
+
+    assert "preferred_path=" in source_text
+    assert "note.md" in source_text
+
+
+def test_proactive_flow_uses_current_provider_for_content_and_tool_model_for_delivery(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    context.llm_response_text = "明天温江区有小雨，出门记得带伞。"
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"proactive_agent_provider_id": "tool-agent"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="三分钟后给我推送明天天气")
+    payload = {
+        "kind": "cron_job",
+        "data": {"id": "job-1", "note": "给我推送明天天气"},
+        "message": "给我推送明天天气",
+    }
+
+    class FakePolicy:
+        def __init__(self, tool_manager):
+            del tool_manager
+
+        def tool_set(self, names):
+            del names
+            return SimpleNamespace(tools=[SimpleNamespace(name="send_message_to_user")])
+
+    async def fake_current_provider_id(event):
+        del event
+        return "grok-current"
+
+    async def fake_build_proactive_context(event, *, config):
+        del event, config
+        return [], "persona"
+
+    monkeypatch.setattr("core.bridge_service.ToolPolicy", FakePolicy)
+    monkeypatch.setattr(service, "_current_provider_id", fake_current_provider_id)
+    monkeypatch.setattr(
+        service, "_build_proactive_context", fake_build_proactive_context
+    )
+
+    asyncio.run(
+        service._run_proactive_agent(
+            event=event,
+            provider_id="tool-agent",
+            payload=payload,
+            config=service.config_manager.config,
+        )
+    )
+
+    assert context.llm_calls[0]["chat_provider_id"] == "grok-current"
+    assert context.tool_loop_calls[0]["chat_provider_id"] == "tool-agent"
+    assert "明天温江区有小雨，出门记得带伞。" in context.tool_loop_calls[0]["prompt"]
+
+
+def test_proactive_tool_first_failure_does_not_generate_fake_content(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"proactive_agent_provider_id": "tool-agent"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="十分钟后总结我刚上传的文件")
+    payload = {
+        "kind": "cron_job",
+        "data": {"id": "job-1", "note": "总结我刚上传的文件"},
+        "message": "十分钟后总结我刚上传的文件",
+    }
+
+    async def fake_current_provider_id(event):
+        del event
+        return "grok-current"
+
+    async def fake_build_proactive_context(event, *, config):
+        del event, config
+        return [], "persona"
+
+    async def fake_prepare_material(**kwargs):
+        del kwargs
+        return ""
+
+    async def fail_generate_content(**kwargs):
+        raise AssertionError("should not generate content when tool prep fails")
+
+    monkeypatch.setattr(service, "_current_provider_id", fake_current_provider_id)
+    monkeypatch.setattr(
+        service, "_build_proactive_context", fake_build_proactive_context
+    )
+    monkeypatch.setattr(service, "_prepare_proactive_material", fake_prepare_material)
+    monkeypatch.setattr(service, "_generate_proactive_content", fail_generate_content)
+
+    asyncio.run(
+        service._run_proactive_agent(
+            event=event,
+            provider_id="tool-agent",
+            payload=payload,
+            config=service.config_manager.config,
+        )
+    )
+
+    assert context.llm_calls == []
+    assert event.sent_messages
 
 
 def test_future_task_decision_preserves_full_note_and_derives_name():

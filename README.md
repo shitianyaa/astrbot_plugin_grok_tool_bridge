@@ -102,8 +102,12 @@ future_task 到点
 -> AstrBot Cron 唤醒主 Agent
 -> 插件识别 cron_job/background_task_result
 -> 如果 proactive_agent_provider_id 未配置，记录 warning 并放过原流程
--> 使用 proactive_agent_provider_id 调用工具执行助手，并注入当前会话的人格提示和历史对话
--> 工具助手调用 send_message_to_user，或由插件把最终文本直接发回原会话
+-> 插件先判断该任务属于哪种主动执行模式
+-> 实时信息类（天气 / 新闻 / 股价等）优先使用当前会话模型生成最终内容
+-> 文件 / 知识库 / grep 类任务优先使用 proactive_agent_provider_id 调工具准备材料
+-> 若既需要工具材料又需要实时搜索，则先准备材料，再由当前会话模型整合成最终内容
+-> 最后统一由 proactive_agent_provider_id 负责 send_message_to_user 等发送动作
+-> 若工具模型最终没有主动发送，插件才会把最终文本直接发回原会话
 -> 原 Grok Agent 即使不会调用函数，也不会影响提醒送达
 ```
 
@@ -116,7 +120,7 @@ future_task 到点
 - 自动模式默认不开放 shell、python、写文件、编辑文件、浏览器自动化等高风险工具。
 - `send_message_to_user` 更适合后台任务主动推送，普通当前会话回复由插件直接发送。
 - 主动任务模式不重写 AstrBot 定时系统，只补齐 Cron 唤醒后的工具执行模型。
-- 主动任务执行模型不自动回退到当前会话模型，避免当前模型仍是 Grok 时继续无法调用工具。
+- 主动任务会按场景选择执行模式：实时信息优先当前会话模型，文件/知识库优先工具模型，最后统一由工具模型负责发送。
 - 插件不会把“猫娘”等固定人格硬编码到运行时提示词里；主动任务会优先复用当前会话的人格提示和历史对话。如果开启 `debug_mode`，日志里会显示是否成功解析到会话人格。
 
 ## 验证
