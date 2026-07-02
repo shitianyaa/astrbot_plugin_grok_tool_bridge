@@ -282,3 +282,87 @@ def test_handle_file_message_auto_processes_file_only_message(
     reply = asyncio.run(service.handle_file_message(event))
 
     assert reply == "summary"
+
+
+def test_run_bridge_stops_after_future_task_create(
+    tmp_path: Path, monkeypatch
+):
+    service = GrokToolBridgeService(
+        context=DummyContext(),
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="明天早上7点叫我起床")
+    execute_calls: list[dict] = []
+    decisions = iter(
+        [
+            ToolDecision(
+                action="tool_call",
+                tool="future_task",
+                args={"action": "create", "name": "叫醒服务", "note": "明天早上7点叫我起床"},
+                confidence=0.9,
+                reason="schedule",
+            ),
+            ToolDecision(
+                action="tool_call",
+                tool="future_task",
+                args={"action": "create", "name": "叫醒服务", "note": "明天早上7点叫我起床"},
+                confidence=0.9,
+                reason="schedule again",
+            ),
+        ]
+    )
+
+    class FakeRouter:
+        def __init__(self, context):
+            del context
+
+        async def decide(self, **kwargs):
+            del kwargs
+            return next(decisions)
+
+    class FakeExecutor:
+        def __init__(self, context, policy):
+            del context, policy
+
+        async def execute(self, **kwargs):
+            execute_calls.append(kwargs)
+            return SimpleNamespace(
+                tool="future_task",
+                args=kwargs["args"],
+                content="scheduled",
+                ok=True,
+                direct_message_sent=False,
+            )
+
+    class FakePolicy:
+        def is_allowed(self, name, allowed_names):
+            del allowed_names
+            return name == "future_task"
+
+    async def fake_final_reply(**kwargs):
+        del kwargs
+        return "done"
+
+    monkeypatch.setattr("core.bridge_service.ToolRouter", FakeRouter)
+    monkeypatch.setattr("core.bridge_service.BuiltinToolExecutor", FakeExecutor)
+    monkeypatch.setattr(service, "_final_reply", fake_final_reply)
+
+    result = asyncio.run(
+        service._run_bridge_inner(
+            event=event,
+            message="明天早上7点叫我起床",
+            allowed_tools=["future_task"],
+            manual=False,
+            req=None,
+            config=ConfigManager({}).config,
+            policy=FakePolicy(),
+            tool_docs="- future_task",
+            router_provider_id="router",
+            current_provider_id="grok",
+        )
+    )
+
+    assert result.handled is True
+    assert result.reply == "done"
+    assert len(execute_calls) == 1

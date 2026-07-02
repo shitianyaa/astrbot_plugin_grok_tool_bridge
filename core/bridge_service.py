@@ -484,6 +484,8 @@ class GrokToolBridgeService:
             tool_results.append(tool_result)
             if not tool_result.ok:
                 break
+            if self._should_finalize_after_tool(decision, tool_result):
+                break
 
         if not tool_results:
             return BridgeRunResult(
@@ -685,6 +687,18 @@ class GrokToolBridgeService:
     @staticmethod
     def _mentions_recent_file(message: str) -> bool:
         return bool(_RECENT_FILE_REFERENCE_RE.search(message or ""))
+
+    @staticmethod
+    def _should_finalize_after_tool(
+        decision: ToolDecision,
+        tool_result: ToolExecutionResult,
+    ) -> bool:
+        if not tool_result.ok:
+            return True
+        if decision.tool != "future_task":
+            return False
+        action = str(decision.args.get("action") or "").strip().lower()
+        return action in {"create", "edit", "delete"}
 
     @classmethod
     def _normalize_future_task_decision(
