@@ -36,4 +36,3 @@ def is_target_provider(
 
     identity = " ".join(provider_identity_parts(provider_id, provider)).lower()
     return any(keyword in identity for keyword in normalized_keywords)
-

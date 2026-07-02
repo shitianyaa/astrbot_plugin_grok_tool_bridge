@@ -138,4 +138,3 @@ class BuiltinToolExecutor:
             else:
                 pieces.append(str(item))
         return pieces
-

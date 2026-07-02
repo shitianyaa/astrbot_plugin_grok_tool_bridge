@@ -58,7 +58,9 @@ class PluginConfig:
     confidence_threshold: float = 0.65
     max_steps: int = 3
     tool_call_timeout: int = 60
-    enabled_auto_tools: list[str] = field(default_factory=lambda: list(DEFAULT_AUTO_TOOLS))
+    enabled_auto_tools: list[str] = field(
+        default_factory=lambda: list(DEFAULT_AUTO_TOOLS)
+    )
     enabled_manual_tools: list[str] = field(
         default_factory=lambda: list(DEFAULT_MANUAL_TOOLS)
     )

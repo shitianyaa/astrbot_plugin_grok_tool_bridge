@@ -122,7 +122,9 @@ class RecentFileStore:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.tool_dir.mkdir(parents=True, exist_ok=True)
 
-        basename = f"{datetime.now(timezone.utc):%Y%m%d%H%M%S}_{uuid4().hex[:8]}{extension}"
+        basename = (
+            f"{datetime.now(timezone.utc):%Y%m%d%H%M%S}_{uuid4().hex[:8]}{extension}"
+        )
         storage_path = self.storage_dir / basename
         tool_path = self.tool_dir / basename
         shutil.copy2(source_path, storage_path)

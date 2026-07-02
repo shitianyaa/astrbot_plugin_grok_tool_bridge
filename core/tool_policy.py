@@ -60,7 +60,10 @@ class ToolPolicy:
             return None
 
     def is_allowed(self, name: str, allowed_names: list[str]) -> bool:
-        return name in set(self._unique_names(allowed_names)) and self.get_tool(name) is not None
+        return (
+            name in set(self._unique_names(allowed_names))
+            and self.get_tool(name) is not None
+        )
 
     def tool_set(self, allowed_names: list[str]):
         from astrbot.api import ToolSet

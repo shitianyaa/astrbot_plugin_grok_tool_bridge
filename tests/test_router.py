@@ -3,9 +3,7 @@ from core.router import parse_tool_decision
 
 
 def test_parse_json_object_from_fenced_text():
-    payload = parse_json_object(
-        '```json\n{"action":"no_tool","confidence":0.2}\n```'
-    )
+    payload = parse_json_object('```json\n{"action":"no_tool","confidence":0.2}\n```')
 
     assert payload == {"action": "no_tool", "confidence": 0.2}
 
@@ -29,4 +27,3 @@ def test_parse_tool_decision_invalid_json_is_no_tool():
 
     assert not decision.wants_tool
     assert decision.action == "no_tool"
-

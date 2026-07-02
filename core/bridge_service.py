@@ -545,9 +545,13 @@ class GrokToolBridgeService:
         contexts: list[dict[str, Any]] = []
 
         try:
-            conversation = await _get_session_conv(event=event, plugin_context=self.context)
+            conversation = await _get_session_conv(
+                event=event, plugin_context=self.context
+            )
         except Exception as exc:
-            logger.debug("GrokToolBridge failed to load proactive conversation: %s", exc)
+            logger.debug(
+                "GrokToolBridge failed to load proactive conversation: %s", exc
+            )
             conversation = None
 
         if conversation is not None:
@@ -576,13 +580,16 @@ class GrokToolBridgeService:
             {},
         )
         try:
-            _persona_id, persona, _force_applied, _special_default = (
-                await self.context.persona_manager.resolve_selected_persona(
-                    umo=event.unified_msg_origin,
-                    conversation_persona_id=getattr(conversation, "persona_id", None),
-                    platform_name=event.get_platform_name(),
-                    provider_settings=provider_settings,
-                )
+            (
+                _persona_id,
+                persona,
+                _force_applied,
+                _special_default,
+            ) = await self.context.persona_manager.resolve_selected_persona(
+                umo=event.unified_msg_origin,
+                conversation_persona_id=getattr(conversation, "persona_id", None),
+                platform_name=event.get_platform_name(),
+                provider_settings=provider_settings,
             )
         except Exception as exc:
             logger.debug("GrokToolBridge failed to resolve persona: %s", exc)
@@ -786,8 +793,7 @@ class GrokToolBridgeService:
             return [cls._render_dynamic_tokens(item) for item in value]
         if isinstance(value, dict):
             return {
-                key: cls._render_dynamic_tokens(item)
-                for key, item in value.items()
+                key: cls._render_dynamic_tokens(item) for key, item in value.items()
             }
         return value
 

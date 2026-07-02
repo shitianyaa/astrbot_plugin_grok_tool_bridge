@@ -63,4 +63,3 @@ def _extract_first_json_object(text: str) -> str | None:
             if depth == 0:
                 return text[start : index + 1]
     return None
-

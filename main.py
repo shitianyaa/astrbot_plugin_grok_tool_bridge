@@ -3,7 +3,9 @@ from __future__ import annotations
 from astrbot.core.config.astrbot_config import AstrBotConfig as CoreAstrBotConfig
 from astrbot.core.message.components import File, Reply
 from astrbot.core.message.message_event_result import MessageChain
-from astrbot.core.platform.astr_message_event import AstrMessageEvent as CoreMessageEvent
+from astrbot.core.platform.astr_message_event import (
+    AstrMessageEvent as CoreMessageEvent,
+)
 from astrbot.core.star.filter.custom_filter import CustomFilter
 
 from astrbot.api import AstrBotConfig, logger
@@ -24,7 +26,10 @@ class HasFileAttachmentFilter(CustomFilter):
             if isinstance(component, File):
                 return True
             if isinstance(component, Reply) and getattr(component, "chain", None):
-                if any(isinstance(reply_component, File) for reply_component in component.chain):
+                if any(
+                    isinstance(reply_component, File)
+                    for reply_component in component.chain
+                ):
                     return True
         return False
 

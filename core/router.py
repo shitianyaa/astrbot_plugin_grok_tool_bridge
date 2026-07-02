@@ -88,4 +88,3 @@ class ToolRouter:
 
         text = str(getattr(response, "completion_text", "") or "")
         return parse_tool_decision(text)
-

@@ -10,4 +10,3 @@ WORKSPACE_ROOT = PLUGIN_ROOT.parent
 for path in (str(PLUGIN_ROOT), str(WORKSPACE_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
-

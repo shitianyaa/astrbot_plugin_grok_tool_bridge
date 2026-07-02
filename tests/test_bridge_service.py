@@ -224,7 +224,9 @@ def test_prepare_bridge_message_resolves_recent_file_reference(tmp_path: Path):
     assert "rules.txt" in bridge_message
 
 
-def test_build_proactive_context_includes_persona_and_history(tmp_path: Path, monkeypatch):
+def test_build_proactive_context_includes_persona_and_history(
+    tmp_path: Path, monkeypatch
+):
     service = GrokToolBridgeService(
         context=DummyContext(),
         config_manager=ConfigManager({}),
@@ -249,11 +251,15 @@ def test_build_proactive_context_includes_persona_and_history(tmp_path: Path, mo
     assert "猫娘" in system_prompt
 
 
-def test_handle_file_message_auto_processes_file_only_message(tmp_path: Path, monkeypatch):
+def test_handle_file_message_auto_processes_file_only_message(
+    tmp_path: Path, monkeypatch
+):
     source = tmp_path / "note.md"
     source.write_text("# title\nhello\n", encoding="utf-8")
     component = File(name="note.md", file=str(source))
-    event = FakeEvent({}, message="", components=[component], session="aiocqhttp:group:test")
+    event = FakeEvent(
+        {}, message="", components=[component], session="aiocqhttp:group:test"
+    )
     service = GrokToolBridgeService(
         context=DummyContext(),
         config_manager=ConfigManager({"auto_process_uploaded_text_file": True}),

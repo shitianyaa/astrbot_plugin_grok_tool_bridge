@@ -16,7 +16,9 @@ def test_config_defaults():
     assert config.enabled_auto_tools == DEFAULT_AUTO_TOOLS
     assert config.enabled_manual_tools == DEFAULT_MANUAL_TOOLS
     assert config.enabled_proactive_tools == DEFAULT_PROACTIVE_TOOLS
-    assert config.recent_file_allowed_extensions == DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS
+    assert (
+        config.recent_file_allowed_extensions == DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS
+    )
     assert config.recent_file_ttl_seconds == 1800
     assert config.recent_file_max_size_kb == 2048
     assert config.auto_process_uploaded_text_file is False
