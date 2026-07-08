@@ -32,7 +32,7 @@ def is_target_provider(
 ) -> bool:
     normalized_keywords = [keyword.lower() for keyword in keywords if keyword]
     if not normalized_keywords:
-        return True
+        return False
 
     identity = " ".join(provider_identity_parts(provider_id, provider)).lower()
     return any(keyword in identity for keyword in normalized_keywords)

@@ -85,6 +85,8 @@ class GrokToolBridgePlugin(Star):
     @filter.command("grok工具", alias={"groktool", "工具桥接"})
     async def grok_tool(self, event: AstrMessageEvent, text: str = ""):
         """Manually run the Grok tool bridge for one request."""
+        if not self.bridge_service.manual_command_available():
+            return
         event.stop_event()
         reply = await self.bridge_service.handle_manual_command(event, text)
         yield event.plain_result(reply)

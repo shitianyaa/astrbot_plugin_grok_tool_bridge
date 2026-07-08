@@ -24,6 +24,18 @@ DEFAULT_PROACTIVE_TOOLS = [
 ]
 
 DEFAULT_TARGET_PROVIDER_KEYWORDS = ["grok", "xai"]
+PROACTIVE_MODE_POLICIES = {
+    "auto",
+    "grok_first",
+    "tool_first",
+    "hybrid",
+    "delivery_only",
+}
+NATIVE_TOOL_PASSTHROUGH_MODES = {
+    "off",
+    "auto",
+    "log_only",
+}
 DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS = [
     ".txt",
     ".md",
@@ -47,6 +59,7 @@ DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS = [
 class PluginConfig:
     enabled: bool = True
     auto_mode: bool = True
+    require_at_or_wake: bool = True
     proactive_mode: bool = True
     manual_command_enabled: bool = True
     target_provider_keywords: list[str] = field(
@@ -67,13 +80,17 @@ class PluginConfig:
     enabled_proactive_tools: list[str] = field(
         default_factory=lambda: list(DEFAULT_PROACTIVE_TOOLS)
     )
+    proactive_mode_policy: str = "auto"
+    native_tool_passthrough_mode: str = "off"
     recent_file_bridge_enabled: bool = True
     recent_file_ttl_seconds: int = 1800
     recent_file_max_size_kb: int = 2048
+    scheduled_file_retention_days: int = 7
     recent_file_allowed_extensions: list[str] = field(
         default_factory=lambda: list(DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS)
     )
     auto_process_uploaded_text_file: bool = False
+    diagnostic_command_enabled: bool = True
     send_progress_message: bool = False
     debug_mode: bool = False
 
@@ -106,6 +123,7 @@ class ConfigManager:
         return PluginConfig(
             enabled=self._bool("enabled", True),
             auto_mode=self._bool("auto_mode", True),
+            require_at_or_wake=self._bool("require_at_or_wake", True),
             proactive_mode=self._bool("proactive_mode", True),
             manual_command_enabled=self._bool("manual_command_enabled", True),
             target_provider_keywords=self._string_list(
@@ -130,6 +148,16 @@ class ConfigManager:
                 "enabled_proactive_tools",
                 DEFAULT_PROACTIVE_TOOLS,
             ),
+            proactive_mode_policy=self._choice(
+                "proactive_mode_policy",
+                "auto",
+                PROACTIVE_MODE_POLICIES,
+            ),
+            native_tool_passthrough_mode=self._choice(
+                "native_tool_passthrough_mode",
+                "off",
+                NATIVE_TOOL_PASSTHROUGH_MODES,
+            ),
             recent_file_bridge_enabled=self._bool("recent_file_bridge_enabled", True),
             recent_file_ttl_seconds=self._int(
                 "recent_file_ttl_seconds",
@@ -143,6 +171,12 @@ class ConfigManager:
                 64,
                 102400,
             ),
+            scheduled_file_retention_days=self._int(
+                "scheduled_file_retention_days",
+                7,
+                1,
+                30,
+            ),
             recent_file_allowed_extensions=self._extension_list(
                 "recent_file_allowed_extensions",
                 DEFAULT_RECENT_FILE_ALLOWED_EXTENSIONS,
@@ -151,6 +185,7 @@ class ConfigManager:
                 "auto_process_uploaded_text_file",
                 False,
             ),
+            diagnostic_command_enabled=self._bool("diagnostic_command_enabled", True),
             send_progress_message=self._bool("send_progress_message", False),
             debug_mode=self._bool("debug_mode", False),
         )
@@ -166,6 +201,10 @@ class ConfigManager:
     def _str(self, key: str, default: str) -> str:
         value = self._get(key, default)
         return str(value or "").strip()
+
+    def _choice(self, key: str, default: str, allowed: set[str]) -> str:
+        value = str(self._get(key, default) or "").strip().lower()
+        return value if value in allowed else default
 
     def _int(self, key: str, default: int, minimum: int, maximum: int) -> int:
         value = self._get(key, default)

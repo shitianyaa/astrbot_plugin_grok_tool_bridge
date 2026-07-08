@@ -18,6 +18,8 @@ class FakeToolManager:
         self.tools = {
             "astr_kb_search": FakeTool("astr_kb_search"),
             "future_task": FakeTool("future_task"),
+            "shell": FakeTool("shell"),
+            "python": FakeTool("python"),
         }
 
     def get_func(self, name):
@@ -51,3 +53,14 @@ def test_tool_set_contains_available_tools_only():
     tool_set = policy.tool_set(["future_task", "missing_tool"])
 
     assert [tool.name for tool in tool_set.tools] == ["future_task"]
+
+
+def test_policy_rejects_configured_tools_outside_bridge_allowlist():
+    policy = ToolPolicy(FakeToolManager())
+
+    assert not policy.is_allowed("shell", ["shell"])
+    assert not policy.is_allowed("python", ["python"])
+
+    tool_set = policy.tool_set(["shell", "astr_kb_search", "python"])
+
+    assert [tool.name for tool in tool_set.tools] == ["astr_kb_search"]

@@ -30,6 +30,10 @@ class DummyContext:
     def get_llm_tool_manager(self):
         return None
 
+    async def get_current_chat_provider_id(self, unified_msg_origin):
+        del unified_msg_origin
+        return "grok-test"
+
     async def llm_generate(self, **kwargs):
         self.llm_calls.append(kwargs)
         return SimpleNamespace(completion_text=self.llm_response_text)
@@ -75,9 +79,13 @@ class FakeEvent:
         self.message_obj = SimpleNamespace(message=components or [])
         self.stopped = False
         self.sent_messages: list[Any] = []
+        self.is_at_or_wake_command = True
 
     def get_extra(self, key, default=None):
         return self.extras.get(key, default)
+
+    def set_extra(self, key, value):
+        self.extras[key] = value
 
     def get_message_str(self):
         return self.message
@@ -141,6 +149,32 @@ def test_proactive_provider_uses_explicit_provider(tmp_path: Path):
     assert service._proactive_provider_id(service.config_manager.config) == "tool-agent"
 
 
+def test_handle_agent_begin_stops_event_after_proactive_takeover(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"proactive_agent_provider_id": "tool-agent"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent(
+        {"cron_job": {"id": "job-1", "note": "提醒我喝水"}},
+        message="提醒我喝水",
+    )
+    calls: list[dict] = []
+
+    async def fake_run_proactive_agent(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(service, "_run_proactive_agent", fake_run_proactive_agent)
+
+    asyncio.run(service.handle_agent_begin(event, run_context=SimpleNamespace()))
+
+    assert calls
+    assert event.stopped is True
+
+
 def test_select_proactive_execution_mode_prefers_grok_for_realtime_info():
     payload = {
         "kind": "cron_job",
@@ -163,6 +197,20 @@ def test_select_proactive_execution_mode_prefers_tools_for_file_tasks():
     assert (
         GrokToolBridgeService._select_proactive_execution_mode(payload) == "tool_first"
     )
+
+
+def test_select_proactive_prep_tools_excludes_future_task_mutations():
+    tools = GrokToolBridgeService._select_proactive_prep_tools(
+        [
+            "send_message_to_user",
+            "future_task",
+            "astr_kb_search",
+            "astrbot_file_read_tool",
+            "astrbot_upload_file",
+        ]
+    )
+
+    assert tools == ["astr_kb_search", "astrbot_file_read_tool"]
 
 
 def test_build_proactive_source_text_reuses_recent_file_context(tmp_path: Path):
@@ -190,6 +238,56 @@ def test_build_proactive_source_text_reuses_recent_file_context(tmp_path: Path):
 
     assert "preferred_path=" in source_text
     assert "note.md" in source_text
+
+
+def test_prepare_proactive_material_uses_resolved_source_text(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"proactive_agent_provider_id": "tool-agent"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="十分钟后总结我刚上传的文件")
+    payload = {
+        "kind": "cron_job",
+        "data": {"id": "job-1", "note": "总结我刚上传的文件"},
+        "message": "十分钟后总结我刚上传的文件",
+    }
+
+    class FakePolicy:
+        def __init__(self, tool_manager):
+            del tool_manager
+
+        def tool_set(self, names):
+            del names
+            return SimpleNamespace(
+                tools=[SimpleNamespace(name="astrbot_file_read_tool")]
+            )
+
+    monkeypatch.setattr("core.bridge_service.ToolPolicy", FakePolicy)
+
+    asyncio.run(
+        service._prepare_proactive_material(
+            event=event,
+            payload=payload,
+            source_text=(
+                "总结我刚上传的文件\n\n"
+                "[Uploaded file context]\n"
+                "source=recent_session_file\n"
+                "file_name=note.md\n"
+                "preferred_path=C:/tmp/note.md\n"
+            ),
+            provider_id="tool-agent",
+            allowed_tools=["astrbot_file_read_tool"],
+            contexts=[],
+            system_prompt="persona",
+            config=service.config_manager.config,
+        )
+    )
+
+    assert "preferred_path=C:/tmp/note.md" in context.tool_loop_calls[0]["prompt"]
 
 
 def test_proactive_flow_uses_current_provider_for_content_and_tool_model_for_delivery(
@@ -282,6 +380,95 @@ def test_proactive_tool_first_failure_does_not_generate_fake_content(
     )
     monkeypatch.setattr(service, "_prepare_proactive_material", fake_prepare_material)
     monkeypatch.setattr(service, "_generate_proactive_content", fail_generate_content)
+
+    asyncio.run(
+        service._run_proactive_agent(
+            event=event,
+            provider_id="tool-agent",
+            payload=payload,
+            config=service.config_manager.config,
+        )
+    )
+
+    assert context.llm_calls == []
+    assert event.sent_messages
+
+
+def test_proactive_delivery_falls_back_when_tool_model_raises(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"proactive_agent_provider_id": "tool-agent"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="提醒我")
+    payload = {
+        "kind": "cron_job",
+        "data": {"id": "job-1", "note": "提醒我"},
+        "message": "提醒我",
+    }
+
+    class FakePolicy:
+        def __init__(self, tool_manager):
+            del tool_manager
+
+        def tool_set(self, names):
+            del names
+            return SimpleNamespace(tools=[SimpleNamespace(name="send_message_to_user")])
+
+    async def fail_tool_loop_agent(**kwargs):
+        del kwargs
+        raise RuntimeError("delivery tool agent failed")
+
+    monkeypatch.setattr("core.bridge_service.ToolPolicy", FakePolicy)
+    monkeypatch.setattr(context, "tool_loop_agent", fail_tool_loop_agent)
+
+    asyncio.run(
+        service._deliver_proactive_content(
+            event=event,
+            payload=payload,
+            provider_id="tool-agent",
+            allowed_tools=["send_message_to_user"],
+            prepared_content="请记得喝水",
+            contexts=[],
+            system_prompt="persona",
+            config=service.config_manager.config,
+        )
+    )
+
+    assert event.sent_messages
+
+
+def test_proactive_delivery_only_skips_content_generation(tmp_path: Path, monkeypatch):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager(
+            {
+                "proactive_agent_provider_id": "tool-agent",
+                "proactive_mode_policy": "delivery_only",
+            }
+        ),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="提醒我喝水")
+    payload = {
+        "kind": "cron_job",
+        "data": {"id": "job-1", "note": "喝水"},
+        "message": "提醒我喝水",
+    }
+
+    class FakePolicy:
+        def __init__(self, tool_manager):
+            del tool_manager
+
+        def tool_set(self, names):
+            del names
+            return None
+
+    monkeypatch.setattr("core.bridge_service.ToolPolicy", FakePolicy)
 
     asyncio.run(
         service._run_proactive_agent(
@@ -393,6 +580,99 @@ def test_rewrite_future_task_decision_note_uses_model_output(tmp_path: Path):
     )
 
     assert rewritten.args["note"] == "请主动向我问好，语气自然一点。"
+
+
+def test_future_task_create_persists_recent_file_context(tmp_path: Path, monkeypatch):
+    source = tmp_path / "note.md"
+    source.write_text("# title\nhello\n", encoding="utf-8")
+    component = File(name="note.md", file=str(source))
+    file_event = FakeEvent({}, message="", components=[component])
+    event = FakeEvent({}, message="1分钟后总结我刚上传的文件")
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    asyncio.run(service.capture_recent_files(file_event))
+    bridge_message = asyncio.run(
+        service._prepare_bridge_message(
+            event=event,
+            message=event.message,
+            req=None,
+            config=service.config_manager.config,
+        )
+    )
+    execute_calls: list[dict] = []
+
+    class FakeRouter:
+        def __init__(self, context):
+            del context
+
+        async def decide(self, **kwargs):
+            del kwargs
+            return ToolDecision(
+                action="tool_call",
+                tool="future_task",
+                args={
+                    "action": "create",
+                    "name": "文件总结",
+                    "note": "总结我刚上传的文件",
+                },
+                confidence=0.9,
+                reason="schedule",
+            )
+
+    class FakeExecutor:
+        def __init__(self, context, policy):
+            del context, policy
+
+        async def execute(self, **kwargs):
+            execute_calls.append(kwargs)
+            return SimpleNamespace(
+                tool="future_task",
+                args=kwargs["args"],
+                content="scheduled",
+                ok=True,
+                direct_message_sent=False,
+            )
+
+    class FakePolicy:
+        def is_allowed(self, name, allowed_names):
+            del allowed_names
+            return name == "future_task"
+
+    async def fake_final_reply(**kwargs):
+        del kwargs
+        return "done"
+
+    monkeypatch.setattr("core.bridge_service.ToolRouter", FakeRouter)
+    monkeypatch.setattr("core.bridge_service.BuiltinToolExecutor", FakeExecutor)
+    monkeypatch.setattr(service, "_final_reply", fake_final_reply)
+
+    result = asyncio.run(
+        service._run_bridge_inner(
+            event=event,
+            message=bridge_message,
+            allowed_tools=["future_task"],
+            manual=False,
+            req=None,
+            config=service.config_manager.config,
+            policy=FakePolicy(),
+            tool_docs="- future_task",
+            router_provider_id="router",
+            current_provider_id="grok",
+        )
+    )
+
+    assert result.handled is True
+    note = execute_calls[0]["args"]["note"]
+    assert "preferred_path=" in note
+    assert "scheduled_files" in note
+    assert "note.md" in note
+    assert "grok_tool_bridge_recent_files" not in note
+    path = note.split("preferred_path=", 1)[1].splitlines()[0]
+    assert Path(path).exists()
 
 
 def test_prepare_bridge_message_uses_recent_uploaded_file(tmp_path: Path):
@@ -516,6 +796,133 @@ def test_handle_file_message_auto_processes_file_only_message(
     reply = asyncio.run(service.handle_file_message(event))
 
     assert reply == "summary"
+
+
+def test_manual_status_diagnostic_does_not_call_llm(tmp_path: Path):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="/grok工具 status")
+
+    reply = asyncio.run(service.handle_manual_command(event, "status"))
+
+    assert "GrokToolBridge 状态" in reply
+    assert context.llm_calls == []
+    assert context.tool_loop_calls == []
+
+
+def test_manual_recent_file_diagnostic_reports_empty(tmp_path: Path):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="/grok工具 recent-file")
+
+    reply = asyncio.run(service.handle_manual_command(event, "recent-file"))
+
+    assert reply == "最近文件：无。"
+    assert context.llm_calls == []
+
+
+def test_manual_command_availability_follows_config(tmp_path: Path):
+    service = GrokToolBridgeService(
+        context=DummyContext(),
+        config_manager=ConfigManager({"enabled": False}),
+        data_dir=tmp_path / "plugin-data",
+    )
+
+    assert service.manual_command_available() is False
+
+    service = GrokToolBridgeService(
+        context=DummyContext(),
+        config_manager=ConfigManager({"manual_command_enabled": False}),
+        data_dir=tmp_path / "plugin-data",
+    )
+
+    assert service.manual_command_available() is False
+
+
+def test_native_tool_passthrough_auto_skips_bridge(tmp_path: Path, monkeypatch):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({"native_tool_passthrough_mode": "auto"}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="明天早上9点提醒我")
+
+    def fake_get_provider_by_id(provider_id):
+        return {"id": provider_id, "supports_tool_calling": True}
+
+    async def fail_run_bridge(**kwargs):
+        del kwargs
+        raise AssertionError("native passthrough should skip bridge")
+
+    monkeypatch.setattr(context, "get_provider_by_id", fake_get_provider_by_id)
+    monkeypatch.setattr(service, "run_bridge", fail_run_bridge)
+
+    asyncio.run(
+        service.handle_llm_request(event, SimpleNamespace(prompt=event.message))
+    )
+
+    assert event.stopped is False
+    assert event.sent_messages == []
+
+
+def test_handle_llm_request_skipped_when_not_at_or_wake(
+    tmp_path: Path, monkeypatch
+):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="明天早上9点提醒我")
+    event.is_at_or_wake_command = False
+
+    async def fail_run_bridge(**kwargs):
+        del kwargs
+        raise AssertionError("not-at-or-wake should skip bridge")
+
+    monkeypatch.setattr(service, "run_bridge", fail_run_bridge)
+
+    asyncio.run(
+        service.handle_llm_request(event, SimpleNamespace(prompt=event.message))
+    )
+
+    assert event.stopped is False
+    assert event.sent_messages == []
+
+
+def test_handle_llm_request_at_or_wake_passes_gate(tmp_path: Path, monkeypatch):
+    context = DummyContext()
+    service = GrokToolBridgeService(
+        context=context,
+        config_manager=ConfigManager({}),
+        data_dir=tmp_path / "plugin-data",
+    )
+    event = FakeEvent({}, message="明天早上9点提醒我")
+    event.is_at_or_wake_command = True
+
+    calls: list[dict] = []
+
+    async def fake_run_bridge(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(handled=False, reply="", decisions=[], reason="")
+
+    monkeypatch.setattr(service, "run_bridge", fake_run_bridge)
+
+    asyncio.run(
+        service.handle_llm_request(event, SimpleNamespace(prompt=event.message))
+    )
+
+    assert calls, "run_bridge should be reached when at-or-wake is True"
 
 
 def test_run_bridge_stops_after_future_task_create(tmp_path: Path, monkeypatch):

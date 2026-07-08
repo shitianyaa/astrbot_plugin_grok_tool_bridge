@@ -27,6 +27,8 @@ from .prompts import (
     PROACTIVE_DELIVERY_USER_TEMPLATE,
     PROACTIVE_AGENT_SYSTEM_PROMPT,
 )
+from .proactive_files import ScheduledFileStore
+from .proactive_planner import ProactivePlanner
 from .recent_file_store import CachedSessionFile, RecentFileStore
 from .router import ToolDecision, ToolRouter
 from .time_parser import extract_future_task_instruction, infer_future_task_schedule
@@ -52,14 +54,19 @@ _GENERIC_TASK_NAMES = {
     "定时任务",
     "任务",
 }
-_PROACTIVE_REALTIME_HINT_RE = re.compile(
-    r"(天气|气温|降雨|下雨|台风|预报|新闻|热搜|股价|汇率|比分|赛事|路况|航班|实时|今天|明天)",
-    re.IGNORECASE,
-)
-_PROACTIVE_TOOL_HINT_RE = re.compile(
-    r"(文件|附件|readme|日志|log|grep|搜索文件|搜一下|查一下知识库|知识库|kb|群规|配置|代码|项目里)",
-    re.IGNORECASE,
-)
+_DIAGNOSTIC_COMMANDS = {
+    "status": "status",
+    "状态": "status",
+    "recent-file": "recent-file",
+    "recent_file": "recent-file",
+    "最近文件": "recent-file",
+    "proactive-status": "proactive-status",
+    "proactive_status": "proactive-status",
+    "主动任务状态": "proactive-status",
+    "clear-cache": "clear-cache",
+    "clear_cache": "clear-cache",
+    "清缓存": "clear-cache",
+}
 
 
 @dataclass
@@ -81,9 +88,15 @@ class GrokToolBridgeService:
         self.context = context
         self.config_manager = config_manager
         self.file_store = RecentFileStore(data_dir)
+        self.scheduled_file_store = ScheduledFileStore(data_dir)
+        self.proactive_planner = ProactivePlanner()
 
     def close(self) -> None:
         self.file_store.close()
+
+    def manual_command_available(self) -> bool:
+        config = self.config_manager.reload()
+        return config.enabled and config.manual_command_enabled
 
     async def capture_recent_files(self, event: Any) -> CachedSessionFile | None:
         config = self.config_manager.reload()
@@ -185,6 +198,7 @@ class GrokToolBridgeService:
             self._proactive_event_name(proactive_payload),
         )
 
+        event.stop_event()
         event.set_extra(BRIDGE_ACTIVE_EXTRA, True)
         try:
             await self._run_proactive_agent(
@@ -201,6 +215,17 @@ class GrokToolBridgeService:
         if not config.enabled or not config.auto_mode:
             return
         if event.get_extra(BRIDGE_ACTIVE_EXTRA):
+            return
+
+        if config.require_at_or_wake and not getattr(
+            event, "is_at_or_wake_command", False
+        ):
+            if config.debug_mode:
+                logger.debug(
+                    "GrokToolBridge skipped LLM request: not at-or-wake; "
+                    "session=%s",
+                    self._event_session(event),
+                )
             return
 
         await self._capture_recent_files(event, config)
@@ -220,6 +245,16 @@ class GrokToolBridgeService:
                     self._event_session(event),
                     config.target_provider_keywords,
                 )
+            return
+        if self._should_passthrough_native_tools(provider, config):
+            self._debug_log(
+                config,
+                "GrokToolBridge skipped LLM request: native tool passthrough; "
+                "provider_id=%s mode=%s session=%s",
+                provider_id,
+                config.native_tool_passthrough_mode,
+                self._event_session(event),
+            )
             return
 
         message = await self._prepare_bridge_message(
@@ -281,6 +316,16 @@ class GrokToolBridgeService:
         if not config.manual_command_enabled:
             return "手动工具桥接命令已关闭。"
 
+        diagnostic_command = self._diagnostic_command_name(text)
+        if diagnostic_command:
+            if not config.diagnostic_command_enabled:
+                return "诊断命令已关闭。"
+            return await self._handle_diagnostic_command(
+                event,
+                diagnostic_command,
+                config=config,
+            )
+
         message = await self._prepare_bridge_message(
             event=event,
             message=text.strip(),
@@ -308,6 +353,110 @@ class GrokToolBridgeService:
             return result.reason or "没有判断出需要调用的工具。"
         return result.reply
 
+    async def _handle_diagnostic_command(
+        self,
+        event: Any,
+        command: str,
+        *,
+        config: PluginConfig,
+    ) -> str:
+        if command == "status":
+            return await self._diagnostic_status(event, config=config)
+        if command == "recent-file":
+            return self._diagnostic_recent_file(event, config=config)
+        if command == "proactive-status":
+            return self._diagnostic_proactive_status(config)
+        if command == "clear-cache":
+            return self._diagnostic_clear_cache(event, config=config)
+        return "未知诊断命令。可用命令：status、recent-file、proactive-status、clear-cache。"
+
+    async def _diagnostic_status(self, event: Any, *, config: PluginConfig) -> str:
+        current_provider_id = await self._current_provider_id(event)
+        router_provider_id = (
+            config.router_provider_id or current_provider_id or "(none)"
+        )
+        final_provider_id = config.final_provider_id or current_provider_id or "(none)"
+        proactive_provider_id = config.proactive_agent_provider_id or "(none)"
+        warnings = self._diagnostic_warnings(config)
+        lines = [
+            "GrokToolBridge 状态",
+            f"enabled: {config.enabled}",
+            f"auto_mode: {config.auto_mode}",
+            f"require_at_or_wake: {config.require_at_or_wake}",
+            f"current_provider: {current_provider_id or '(none)'}",
+            f"router_provider: {router_provider_id}",
+            f"final_provider: {final_provider_id}",
+            f"proactive_provider: {proactive_provider_id}",
+            f"proactive_mode_policy: {config.proactive_mode_policy}",
+            f"native_tool_passthrough_mode: {config.native_tool_passthrough_mode}",
+            f"auto_tools: {', '.join(config.enabled_auto_tools) or '(none)'}",
+        ]
+        if warnings:
+            lines.append(f"warnings: {'; '.join(warnings)}")
+        return "\n".join(lines)
+
+    def _diagnostic_recent_file(self, event: Any, *, config: PluginConfig) -> str:
+        summary = self.file_store.describe_recent_file(
+            self._event_session(event),
+            ttl_seconds=config.recent_file_ttl_seconds,
+        )
+        if summary is None:
+            return "最近文件：无。"
+        return "\n".join(
+            [
+                "最近文件",
+                f"name: {summary.file_name}",
+                f"size_bytes: {summary.size_bytes}",
+                f"available: {summary.tool_path_exists}",
+                f"captured_at: {summary.captured_at.isoformat(timespec='seconds')}",
+                f"expires_at: {summary.expires_at.isoformat(timespec='seconds')}",
+            ]
+        )
+
+    def _diagnostic_proactive_status(self, config: PluginConfig) -> str:
+        scheduled_summary = self.scheduled_file_store.summary()
+        provider_status = (
+            "configured" if config.proactive_agent_provider_id else "missing"
+        )
+        return "\n".join(
+            [
+                "主动任务状态",
+                f"proactive_mode: {config.proactive_mode}",
+                f"proactive_provider: {provider_status}",
+                f"proactive_mode_policy: {config.proactive_mode_policy}",
+                f"enabled_proactive_tools: {', '.join(config.enabled_proactive_tools) or '(none)'}",
+                f"scheduled_files: {scheduled_summary.count}",
+                f"scheduled_file_retention_days: {config.scheduled_file_retention_days}",
+            ]
+        )
+
+    def _diagnostic_clear_cache(self, event: Any, *, config: PluginConfig) -> str:
+        recent_cleared = self.file_store.clear_session(self._event_session(event))
+        expired_scheduled = self.scheduled_file_store.cleanup(
+            retention_days=config.scheduled_file_retention_days
+        )
+        return "\n".join(
+            [
+                "缓存清理完成",
+                f"recent_file_cleared: {recent_cleared}",
+                f"expired_scheduled_files_removed: {expired_scheduled}",
+            ]
+        )
+
+    @staticmethod
+    def _diagnostic_warnings(config: PluginConfig) -> list[str]:
+        warnings: list[str] = []
+        if config.auto_mode and not config.enabled_auto_tools:
+            warnings.append("enabled_auto_tools is empty")
+        if config.proactive_mode and not config.proactive_agent_provider_id:
+            warnings.append("proactive_agent_provider_id is empty")
+        if (
+            config.proactive_mode
+            and "send_message_to_user" not in config.enabled_proactive_tools
+        ):
+            warnings.append("send_message_to_user is not enabled for proactive tasks")
+        return warnings
+
     async def _run_proactive_agent(
         self,
         *,
@@ -331,21 +480,26 @@ class GrokToolBridgeService:
             event,
             config=config,
         )
-        mode = self._select_proactive_execution_mode(payload)
         source_text = self._build_proactive_source_text(
             event=event,
             payload=payload,
             config=config,
         )
+        proactive_plan = self.proactive_planner.plan(
+            source_text=source_text,
+            policy=config.proactive_mode_policy,
+        )
+        mode = proactive_plan.mode
         content_provider_id = await self._current_provider_id(event) or provider_id
         prepared_material = ""
-        if mode in {"tool_first", "hybrid"}:
+        if proactive_plan.needs_tool_prep:
             prep_tools = self._select_proactive_prep_tools(
                 config.enabled_proactive_tools
             )
             prepared_material = await self._prepare_proactive_material(
                 event=event,
                 payload=payload,
+                source_text=source_text,
                 provider_id=provider_id,
                 allowed_tools=prep_tools,
                 contexts=contexts,
@@ -375,22 +529,26 @@ class GrokToolBridgeService:
                 )
                 return
 
-        prepared_content = await self._generate_proactive_content(
-            event=event,
-            payload=payload,
-            provider_id=content_provider_id,
-            contexts=contexts,
-            system_prompt=system_prompt,
-            prepared_material=prepared_material,
-            allow_native_search=(mode in {"grok_first", "hybrid"}),
-            config=config,
-        )
+        if proactive_plan.needs_content_generation:
+            prepared_content = await self._generate_proactive_content(
+                event=event,
+                payload=payload,
+                provider_id=content_provider_id,
+                contexts=contexts,
+                system_prompt=system_prompt,
+                prepared_material=prepared_material,
+                allow_native_search=proactive_plan.allow_native_search,
+                config=config,
+            )
+        else:
+            prepared_content = self._build_delivery_only_content(payload, source_text)
         self._debug_log(
             config,
             "GrokToolBridge proactive mode selected; session=%s mode=%s "
-            "source=%s prepared_material=%s",
+            "reason=%s source=%s prepared_material=%s",
             self._event_session(event),
             mode,
+            proactive_plan.reason,
             self._short_text(source_text, limit=200),
             self._short_text(prepared_material or "(none)", limit=200),
         )
@@ -412,6 +570,7 @@ class GrokToolBridgeService:
         *,
         event: Any,
         payload: dict[str, Any],
+        source_text: str,
         provider_id: str,
         allowed_tools: list[str],
         contexts: list[dict[str, Any]],
@@ -431,7 +590,7 @@ class GrokToolBridgeService:
         prompt = PROACTIVE_TOOL_PREP_USER_TEMPLATE.format(
             event_kind=payload["kind"],
             payload=json.dumps(payload["data"], ensure_ascii=False),
-            message=str(payload.get("message") or ""),
+            message=source_text or str(payload.get("message") or ""),
         )
         try:
             response = await self.context.tool_loop_agent(
@@ -533,8 +692,20 @@ class GrokToolBridgeService:
                 exc,
                 exc_info=True,
             )
+            await self._send_prepared_content_fallback(
+                event=event,
+                payload=payload,
+                provider_id=provider_id,
+                prepared_content=prepared_content,
+                reason="delivery_failed",
+            )
             return
 
+        # NOTE: `_has_send_oper` is an AstrBot private flag set by `event.send()`
+        # and `event.send_typing()` to indicate the event already produced an
+        # outgoing message. It is used here to skip the fallback text when a
+        # tool (e.g. `send_message_to_user`) has already delivered the reply.
+        # Cross-version safety: re-check this attribute if AstrBot renames it.
         if bool(getattr(event, "_has_send_oper", False)):
             logger.info(
                 "GrokToolBridge proactive delivery finished; message already sent "
@@ -548,28 +719,66 @@ class GrokToolBridgeService:
 
         text = str(getattr(response, "completion_text", "") or "").strip()
         if text:
-            await event.send(MessageChain().message(text))
-            logger.info(
-                "GrokToolBridge proactive delivery fallback-sent final text; "
-                "delivery_provider_id=%s kind=%s session=%s event=%s text_len=%s",
-                provider_id,
-                payload["kind"],
-                self._event_session(event),
-                self._proactive_event_name(payload),
-                len(text),
+            await self._send_prepared_content_fallback(
+                event=event,
+                payload=payload,
+                provider_id=provider_id,
+                prepared_content=text,
+                reason="delivery_model_returned_text",
             )
         else:
+            await self._send_prepared_content_fallback(
+                event=event,
+                payload=payload,
+                provider_id=provider_id,
+                prepared_content=prepared_content,
+                reason="delivery_model_returned_empty",
+            )
+
+    async def _send_prepared_content_fallback(
+        self,
+        *,
+        event: Any,
+        payload: dict[str, Any],
+        provider_id: str,
+        prepared_content: str,
+        reason: str,
+    ) -> None:
+        try:
             await event.send(MessageChain().message(prepared_content))
+        except Exception as exc:
             logger.warning(
-                "GrokToolBridge proactive delivery produced no send operation and "
-                "no final text; fallback-sent prepared content; "
-                "delivery_provider_id=%s kind=%s session=%s event=%s text_len=%s",
+                "GrokToolBridge proactive direct send failed; reason=%s "
+                "delivery_provider_id=%s kind=%s session=%s event=%s error=%s",
+                reason,
                 provider_id,
                 payload["kind"],
                 self._event_session(event),
                 self._proactive_event_name(payload),
-                len(prepared_content),
+                exc,
+                exc_info=True,
             )
+            return
+
+        log_method = (
+            logger.warning
+            if reason
+            in {
+                "delivery_failed",
+                "delivery_model_returned_empty",
+            }
+            else logger.info
+        )
+        log_method(
+            "GrokToolBridge proactive fallback sent text; reason=%s "
+            "delivery_provider_id=%s kind=%s session=%s event=%s text_len=%s",
+            reason,
+            provider_id,
+            payload["kind"],
+            self._event_session(event),
+            self._proactive_event_name(payload),
+            len(prepared_content),
+        )
 
     async def _generate_proactive_content(
         self,
@@ -744,6 +953,12 @@ class GrokToolBridgeService:
                 decision=decision,
                 original_message=message,
                 provider_id=router_provider_id,
+                config=config,
+            )
+            decision = self._attach_scheduled_file_context_to_future_task_decision(
+                decision=decision,
+                event=event,
+                original_message=message,
                 config=config,
             )
             decisions.append(decision)
@@ -1099,6 +1314,69 @@ class GrokToolBridgeService:
     def _mentions_recent_file(message: str) -> bool:
         return bool(_RECENT_FILE_REFERENCE_RE.search(message or ""))
 
+    def _attach_scheduled_file_context_to_future_task_decision(
+        self,
+        *,
+        decision: ToolDecision,
+        event: Any,
+        original_message: str,
+        config: PluginConfig,
+    ) -> ToolDecision:
+        if decision.tool != "future_task" or not decision.args:
+            return decision
+        action = str(decision.args.get("action") or "").strip().lower()
+        if action != "create":
+            return decision
+
+        args = dict(decision.args)
+        note = str(args.get("note") or "").strip()
+        combined_text = f"{original_message}\n{note}"
+        if "preferred_path=" in combined_text and "scheduled_files" in combined_text:
+            return decision
+        if not self._mentions_recent_file(combined_text):
+            return decision
+
+        recent_file = self.file_store.get_recent_file(
+            self._event_session(event),
+            ttl_seconds=config.recent_file_ttl_seconds,
+        )
+        if recent_file is None:
+            return decision
+
+        scheduled_file = self.scheduled_file_store.persist(
+            recent_file,
+            retention_days=config.scheduled_file_retention_days,
+        )
+        if scheduled_file is None:
+            return decision
+
+        args["note"] = self._append_file_context(
+            self._strip_uploaded_file_context(
+                note or extract_future_task_instruction(original_message)
+            ),
+            scheduled_file,
+            source="scheduled_session_file",
+        )
+        self._debug_log(
+            config,
+            "GrokToolBridge future_task scheduled file persisted; session=%s "
+            "file=%s retention_days=%s",
+            self._event_session(event),
+            scheduled_file.file_name,
+            config.scheduled_file_retention_days,
+        )
+        return ToolDecision(
+            action=decision.action,
+            tool=decision.tool,
+            args=args,
+            confidence=decision.confidence,
+            reason=decision.reason,
+        )
+
+    @staticmethod
+    def _strip_uploaded_file_context(message: str) -> str:
+        return str(message or "").split("[Uploaded file context]", 1)[0].strip()
+
     @staticmethod
     def _should_finalize_after_tool(
         decision: ToolDecision,
@@ -1255,6 +1533,40 @@ class GrokToolBridgeService:
         except Exception:
             return ""
 
+    def _should_passthrough_native_tools(
+        self,
+        provider: Any,
+        config: PluginConfig,
+    ) -> bool:
+        mode = config.native_tool_passthrough_mode
+        if mode == "off":
+            return False
+
+        supports_native_tools = self._provider_supports_native_tools(provider)
+        if mode == "log_only":
+            if supports_native_tools:
+                logger.info(
+                    "GrokToolBridge native tool capability detected; "
+                    "native_tool_passthrough_mode=log_only"
+                )
+            return False
+        return supports_native_tools
+
+    @staticmethod
+    def _provider_supports_native_tools(provider: Any) -> bool:
+        if provider is None:
+            return False
+        capability_names = {
+            "supports_tool_calling",
+            "support_tool_calling",
+            "supports_tools",
+            "support_tools",
+            "tool_calling",
+        }
+        if isinstance(provider, dict):
+            return any(bool(provider.get(name)) for name in capability_names)
+        return any(bool(getattr(provider, name, False)) for name in capability_names)
+
     @staticmethod
     def _proactive_provider_id(config: PluginConfig) -> str:
         return config.proactive_agent_provider_id
@@ -1299,23 +1611,24 @@ class GrokToolBridgeService:
 
     @classmethod
     def _select_proactive_execution_mode(cls, payload: dict[str, Any]) -> str:
-        text = cls._proactive_source_text(payload)
-        has_realtime = bool(_PROACTIVE_REALTIME_HINT_RE.search(text))
-        has_tool = bool(_PROACTIVE_TOOL_HINT_RE.search(text))
-        if has_realtime and has_tool:
-            return "hybrid"
-        if has_tool:
-            return "tool_first"
-        return "grok_first"
+        return (
+            ProactivePlanner()
+            .plan(
+                source_text=cls._proactive_source_text(payload),
+                policy="auto",
+            )
+            .mode
+        )
 
     @staticmethod
     def _select_proactive_prep_tools(allowed_tools: list[str]) -> list[str]:
-        send_tools = {
+        non_prep_tools = {
             "send_message_to_user",
+            "future_task",
             "astrbot_upload_file",
             "astrbot_download_file",
         }
-        return [name for name in allowed_tools if name not in send_tools]
+        return [name for name in allowed_tools if name not in non_prep_tools]
 
     @staticmethod
     def _select_proactive_delivery_tools(allowed_tools: list[str]) -> list[str]:
@@ -1337,6 +1650,24 @@ class GrokToolBridgeService:
             "这次定时任务依赖本地文件、知识库或项目检索结果，但执行时没有成功获取到所需材料。"
             "请检查相关资源后重新创建任务。"
         )
+
+    @classmethod
+    def _build_delivery_only_content(
+        cls,
+        payload: dict[str, Any],
+        source_text: str,
+    ) -> str:
+        data = payload.get("data")
+        note = ""
+        if isinstance(data, dict):
+            note = str(data.get("note") or "").strip()
+        text = note or str(payload.get("message") or "").strip() or source_text
+        cleaned = cls._collapse_whitespace(text)
+        if not cleaned:
+            return "提醒时间到了。"
+        if re.match(r"^(提醒|记得|请|该|到点)", cleaned):
+            return cleaned
+        return f"提醒：{cleaned}"
 
     @classmethod
     def _proactive_payload(cls, event: Any) -> dict[str, Any] | None:
@@ -1431,6 +1762,11 @@ class GrokToolBridgeService:
         if not config.debug_mode:
             return
         logger.info(message, *args)
+
+    @staticmethod
+    def _diagnostic_command_name(text: str) -> str:
+        head = str(text or "").strip().split(maxsplit=1)[0].lower()
+        return _DIAGNOSTIC_COMMANDS.get(head, "")
 
     @staticmethod
     def _request_message(event: Any, req: Any) -> str:

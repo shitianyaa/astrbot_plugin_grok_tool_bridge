@@ -10,7 +10,6 @@ from uuid import uuid4
 
 from astrbot.api import logger
 from astrbot.core.message.components import File, Reply
-from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 from .config_manager import PluginConfig
 
@@ -29,11 +28,20 @@ class CachedSessionFile:
         return self.captured_at + timedelta(seconds=ttl_seconds) <= now
 
 
+@dataclass(frozen=True)
+class CachedSessionFileSummary:
+    file_name: str
+    size_bytes: int
+    tool_path_exists: bool
+    captured_at: datetime
+    expires_at: datetime
+
+
 class RecentFileStore:
     def __init__(self, data_dir: Path | str):
         self.data_dir = Path(data_dir)
         self.storage_dir = self.data_dir / "recent_files"
-        self.tool_dir = Path(get_astrbot_temp_path()) / "grok_tool_bridge_recent_files"
+        self.tool_dir = self.data_dir / "recent_file_tool_paths"
         self._by_session: dict[str, CachedSessionFile] = {}
 
     async def capture_from_event(
@@ -69,6 +77,28 @@ class RecentFileStore:
             self._drop_session(session_id)
             return None
         return cached
+
+    def describe_recent_file(
+        self,
+        session_id: str,
+        *,
+        ttl_seconds: int,
+    ) -> CachedSessionFileSummary | None:
+        cached = self.get_recent_file(session_id, ttl_seconds=ttl_seconds)
+        if cached is None:
+            return None
+        return CachedSessionFileSummary(
+            file_name=cached.file_name,
+            size_bytes=cached.size_bytes,
+            tool_path_exists=Path(cached.tool_path).exists(),
+            captured_at=cached.captured_at,
+            expires_at=cached.captured_at + timedelta(seconds=ttl_seconds),
+        )
+
+    def clear_session(self, session_id: str) -> bool:
+        had_file = session_id in self._by_session
+        self._drop_session(session_id)
+        return had_file
 
     def cleanup(self, *, ttl_seconds: int) -> None:
         now = datetime.now(timezone.utc)

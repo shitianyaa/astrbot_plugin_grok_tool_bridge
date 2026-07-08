@@ -1,17 +1,19 @@
 # Grok 工具桥接
 
-`astrbot_plugin_grok_tool_bridge` 为 Grok / xAI 等在 AstrBot 中不稳定调用函数工具的模型提供一层工具桥接。
+`astrbot_plugin_grok_tool_bridge` 是 AstrBot 的模型能力兼容层。
 
-它不会修改 Grok 的原生能力，也不会重新实现 AstrBot 内置工具。插件会在 AstrBot 准备请求目标模型前，先用一个路由模型判断是否需要工具；如果需要，就由插件调用 AstrBot 内置工具，再把工具结果交给 Grok 或配置的最终模型生成回复。
+它面向 Grok / xAI 等“回复质量好、可能有原生搜索能力，但在 AstrBot 中不能稳定调用工具”的模型：插件先用路由模型判断是否需要工具；需要时复用 AstrBot 内置工具执行；最后把工具结果交回 Grok 或配置的最终模型生成回复。插件不修改 AstrBot Core，也不重写内置工具。
 
 ## 功能
 
-- 自动模式：在 Grok 会话触发 LLM 前判断是否需要工具。
-- 手动模式：使用 `/grok工具 <需求>` 明确触发桥接。
-- 主动任务模式：`future_task` 到点后交给可自定义的工具执行助手处理并通知用户。
-- 最近文件模式：缓存当前会话最近一个白名单文本文件，支持“总结刚才的文件”“搜索上一个附件里的 xxx”这类自然语言续接。
-- 复用 AstrBot 内置工具，保留原有权限、路径、知识库和定时任务逻辑。
-- Grok 自带联网搜索，本插件默认不桥接 `web_search_*`。
+- 自动桥接：在目标 Grok/xAI 会话触发 LLM 前判断是否需要工具。
+- 触发网关：默认群聊需 @bot / 唤醒词 / 回复 bot 才进入自动桥接，私聊不受影响（`require_at_or_wake`）。
+- 手动桥接：使用 `/grok工具 <需求>`、`/groktool <需求>` 或 `/工具桥接 <需求>` 明确触发。
+- 主动任务：接管 `future_task` 到点后的 cron/background 事件，由工具模型负责取材料和发送。
+- 最近文件：缓存当前会话最近一个白名单附件，支持“总结刚才的文件”这类后续引用。
+- 定时文件：创建引用最近文件的 future_task 时保存稳定副本，避免 TTL 或重启后文件路径丢失。
+- 诊断命令：本地查看 provider、工具白名单、最近文件、主动任务状态，不调用外部模型。
+- 原生工具透传：为未来 Grok provider 稳定支持工具调用预留保守跳过模式。
 
 默认自动工具白名单：
 
@@ -26,25 +28,52 @@
 - `astrbot_upload_file`
 - `astrbot_download_file`
 
-主动任务默认允许：
+主动任务默认额外保留：
 
 - `send_message_to_user`
-- `future_task`
-- `astr_kb_search`
-- `astrbot_file_read_tool`
-- `astrbot_grep_tool`
 
-## 使用方式
+## 工作流
 
-自动模式开启后，满足 AstrBot 原本唤醒条件的 Grok 消息会先经过工具路由：
+普通自动桥接：
+
+```text
+收到 LLM 请求
+-> 是否 @bot 或唤醒词（require_at_or_wake，群聊默认开启）
+-> 当前 Provider 是否匹配 Grok/xAI
+-> 是否需要原生工具透传
+-> 路由模型输出 JSON 决策
+-> no_tool：放行给原 Grok
+-> tool_call：执行白名单内置工具
+-> Grok / final_provider 整理工具结果
+-> 插件发送最终回复
+```
+
+主动任务：
+
+```text
+future_task 到点
+-> 识别 cron_job/background_task_result
+-> ProactivePlanner 选择执行模式
+-> delivery_only：简单提醒直接发送
+-> grok_first：天气/新闻等实时信息交给当前会话模型生成内容
+-> tool_first：文件/知识库/grep 先用工具模型准备材料
+-> hybrid：先取工具材料，再让当前会话模型结合实时能力生成
+-> 最后由工具模型优先调用 send_message_to_user
+-> 如果工具模型没有发送或异常，插件直接发送准备好的文本兜底
+-> 插件停止默认 Agent 继续处理，避免同一主动任务重复回复
+```
+
+## 使用示例
+
+自动模式：
 
 ```text
 明天早上 9 点提醒我交日报
+读取 README.md，总结内容
+搜索刚才文件里关于早餐的段落
 ```
 
-插件会判断为 `future_task`，调用内置定时任务工具，再让最终模型总结结果。
-
-手动命令：
+手动模式：
 
 ```text
 /grok工具 明天早上 9 点提醒我交日报
@@ -53,80 +82,74 @@
 /grok工具 在项目里搜 send_message_to_user
 ```
 
-最近文件桥接示例：
+最近文件：
 
 ```text
-<先发送一个 txt / md / pdf / docx 文件>
+<先发送 txt / md / pdf / docx 等白名单附件>
 总结我刚才发的文件
-搜索刚才文件里关于早餐的段落
+1分钟后总结我刚上传的文件
 ```
 
-如果开启了 `auto_process_uploaded_text_file`，并且当前会话 provider 命中 `target_provider_keywords`，那么用户单独发送一个白名单文本附件时，插件也可以直接自动总结。
+如果任务创建时引用了最近文件，插件会把文件复制到插件数据目录的 `scheduled_files`，并把稳定路径写进 future_task 的 note。到点后工具模型会读取这个稳定路径。
+
+## 诊断命令
+
+诊断命令不会调用 LLM：
+
+```text
+/grok工具 status
+/grok工具 recent-file
+/grok工具 proactive-status
+/grok工具 clear-cache
+```
+
+- `status`：显示当前 provider、router/final/proactive provider、工具白名单和配置告警。
+- `recent-file`：显示当前会话最近文件名、大小、是否可用和过期时间。
+- `proactive-status`：显示主动任务开关、策略、发送工具和定时文件数量。
+- `clear-cache`：清理当前会话最近文件缓存，并清理已过期的定时文件副本。
+
+## 配置建议
+
+- `router_provider_id`：建议选择稳定输出 JSON 的模型。
+- `require_at_or_wake`：默认开启；群聊需 @bot / 唤醒词 / 回复 bot 才触发自动桥接，私聊不受影响。关闭后恢复对所有命中的 Grok 请求判断桥接。
+- `final_provider_id`：留空时使用当前会话模型，通常就是 Grok。
+- `proactive_agent_provider_id`：主动任务必须配置一个稳定支持 tools/function calling 的模型。
+- `proactive_mode_policy`：默认 `auto`；可强制为 `grok_first`、`tool_first`、`hybrid` 或 `delivery_only`。
+- `target_provider_keywords`：默认 `grok`、`xai`；留空表示不自动桥接任何 Provider。
+- `enabled_auto_tools`：自动模式白名单，建议保持默认。
+- `enabled_manual_tools`：手动命令白名单，默认比自动模式多 `send_message_to_user`、上传和下载工具。
+- `enabled_proactive_tools`：主动任务白名单，建议保留 `send_message_to_user`。
+- `recent_file_allowed_extensions` / `recent_file_max_size_kb`：限制可缓存附件类型和大小。
+- `scheduled_file_retention_days`：引用最近文件创建 future_task 时，稳定副本保留天数，默认 7 天。
+- `auto_process_uploaded_text_file`：单独发送文件时是否自动总结，默认关闭，避免误触发和影响其他文件插件。
+- `native_tool_passthrough_mode`：默认 `off`；未来 provider 明确支持原生工具时可设为 `auto` 或 `log_only`。
+- `debug_mode`：开启后输出每步 provider、planner 模式、router 决策、工具参数、结果预览和 fallback 原因。
+
+## 边界
+
+- 不默认开放 shell、python、写文件、编辑文件、浏览器自动化等高风险工具。
+- 不接管所有消息，只处理命中目标 provider 且确实需要工具的请求。
+- 不把固定人格写入运行时提示词；主动任务会优先复用当前会话的人格提示和历史对话。
+- 不实现独立联网搜索；实时信息优先交给 Grok / xAI 原生能力。
+- 不删除未过期的定时文件副本，避免破坏已创建的未来任务。
+- 主动任务优先走 `send_message_to_user`，但发送工具不可用或失败时会直接向原事件发送兜底文本，保证提醒可达。
 
 ## 平台支持
 
 - 已声明支持：`aiocqhttp`
 - 其他平台未验证，暂不在 `metadata.yaml` 中声明。
 
-## 配置建议
-
-- `router_provider_id`：建议选择 `gpt-oss-120b` 这类稳定输出 JSON 的模型。
-- `final_provider_id`：留空时使用当前会话模型，通常就是 Grok。
-- `proactive_agent_provider_id`：必须选择一个稳定支持 tools/function calling 的模型，用于 future_task 到点后的执行和通知；留空不会回退当前 Grok，只会记录警告并放过原流程。
-- `target_provider_keywords`：默认 `grok`、`xai`，只自动接管这类 Provider。
-- `confidence_threshold`：默认 `0.65`，低于阈值不接管默认 Grok 回复。
-- `enabled_auto_tools`：自动模式白名单，建议保持默认。
-- `enabled_proactive_tools`：主动任务白名单，建议保留 `send_message_to_user`。
-- `recent_file_bridge_enabled`：是否缓存最近一个聊天文件附件，并支持后续“刚才的文件”式引用。
-- `recent_file_allowed_extensions` / `recent_file_max_size_kb`：限制会被缓存的聊天文件类型和大小。
-- `auto_process_uploaded_text_file`：是否在用户单独发送文件时立刻自动总结；默认关闭，避免误触发。该模式仍会遵守 `target_provider_keywords` 的 provider 匹配。
-- `debug_mode`：开启后会输出详细桥接日志，能看到 `session`、当前/路由/最终使用的 Provider、`step` 序号、router 决策、tool 参数和结果预览，适合在 AstrBot 里排查“为什么没触发/为什么触发错了”。
-
-## 工作流程
-
-```text
-收到 LLM 请求
--> 当前 Provider 是否匹配 Grok/xAI
--> 路由模型输出 JSON 决策
--> no_tool：放行给原 Grok
--> tool_call：停止默认请求
--> 执行白名单内置工具
--> 调最终模型整理回复
--> 发送给用户
-```
-
-未来任务到点后的主动执行流程：
-
-```text
-future_task 到点
--> AstrBot Cron 唤醒主 Agent
--> 插件识别 cron_job/background_task_result
--> 如果 proactive_agent_provider_id 未配置，记录 warning 并放过原流程
--> 插件先判断该任务属于哪种主动执行模式
--> 实时信息类（天气 / 新闻 / 股价等）优先使用当前会话模型生成最终内容
--> 文件 / 知识库 / grep 类任务优先使用 proactive_agent_provider_id 调工具准备材料
--> 若既需要工具材料又需要实时搜索，则先准备材料，再由当前会话模型整合成最终内容
--> 最后统一由 proactive_agent_provider_id 负责 send_message_to_user 等发送动作
--> 若工具模型最终没有主动发送，插件才会把最终文本直接发回原会话
--> 原 Grok Agent 即使不会调用函数，也不会影响提醒送达
-```
-
-## 边界
-
-- 这不是 Grok 原生 function calling。
-- 插件只在 AstrBot 已经准备调用 LLM 时工作，不扫描所有群消息。
-- 不确定是否需要工具时会放行，不接管。
-- 最近文件桥接只缓存每个会话最新一个白名单附件，超时后会自动失效。
-- 自动模式默认不开放 shell、python、写文件、编辑文件、浏览器自动化等高风险工具。
-- `send_message_to_user` 更适合后台任务主动推送，普通当前会话回复由插件直接发送。
-- 主动任务模式不重写 AstrBot 定时系统，只补齐 Cron 唤醒后的工具执行模型。
-- 主动任务会按场景选择执行模式：实时信息优先当前会话模型，文件/知识库优先工具模型，最后统一由工具模型负责发送。
-- 插件不会把“猫娘”等固定人格硬编码到运行时提示词里；主动任务会优先复用当前会话的人格提示和历史对话。如果开启 `debug_mode`，日志里会显示是否成功解析到会话人格。
-
 ## 验证
 
 ```powershell
 python -m json.tool _conf_schema.json
-python -m py_compile main.py core\*.py
+$files = @('main.py') + (Get-ChildItem core -Filter *.py | ForEach-Object { $_.FullName }); python -m py_compile $files
 python -m pytest -q
+```
+
+可选质量检查：
+
+```powershell
+python -m ruff check .
+python -m ruff format --check .
 ```

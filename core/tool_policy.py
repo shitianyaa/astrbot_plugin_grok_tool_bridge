@@ -16,6 +16,7 @@ TOOL_PURPOSES = {
     "astrbot_upload_file": "Transfer an existing host file into the sandbox for processing.",
     "astrbot_download_file": "Transfer a sandbox file out to the host and optionally send it to the user.",
 }
+BRIDGE_TOOL_ALLOWLIST = frozenset(TOOL_PURPOSES)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,8 @@ class ToolPolicy:
 
     def get_tool(self, name: str) -> Any | None:
         if not name:
+            return None
+        if name not in BRIDGE_TOOL_ALLOWLIST:
             return None
         get_func = getattr(self.tool_manager, "get_func", None)
         if not callable(get_func):

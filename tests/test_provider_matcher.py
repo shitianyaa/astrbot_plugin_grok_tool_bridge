@@ -25,4 +25,4 @@ def test_is_target_provider_matches_keywords():
     assert is_target_provider("provider-1", FakeProvider(), ["grok"])
     assert is_target_provider("provider-1", FakeProvider(), ["xai"])
     assert not is_target_provider("provider-1", FakeProvider(), ["gemini"])
-    assert is_target_provider("provider-1", FakeProvider(), [])
+    assert not is_target_provider("provider-1", FakeProvider(), [])
