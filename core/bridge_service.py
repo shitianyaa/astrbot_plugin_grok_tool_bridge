@@ -222,8 +222,7 @@ class GrokToolBridgeService:
         ):
             if config.debug_mode:
                 logger.debug(
-                    "GrokToolBridge skipped LLM request: not at-or-wake; "
-                    "session=%s",
+                    "GrokToolBridge skipped LLM request: not at-or-wake; session=%s",
                     self._event_session(event),
                 )
             return

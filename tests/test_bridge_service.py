@@ -874,9 +874,7 @@ def test_native_tool_passthrough_auto_skips_bridge(tmp_path: Path, monkeypatch):
     assert event.sent_messages == []
 
 
-def test_handle_llm_request_skipped_when_not_at_or_wake(
-    tmp_path: Path, monkeypatch
-):
+def test_handle_llm_request_skipped_when_not_at_or_wake(tmp_path: Path, monkeypatch):
     context = DummyContext()
     service = GrokToolBridgeService(
         context=context,
