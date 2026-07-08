@@ -44,6 +44,21 @@ class GrokImageCommand:
     # ==================== 消息段处理 ====================
 
     @staticmethod
+    def _to_bool(value: Any, default: bool = False) -> bool:
+        """将配置值转换为布尔值"""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off", ""}:
+                return False
+        return default
+
+    @staticmethod
     def _is_segment_type(seg: Any, type_name: str) -> bool:
         """兼容不同平台的消息段类型判断"""
         cls = getattr(Comp, type_name, None)
@@ -266,7 +281,7 @@ class GrokImageCommand:
             yield event.plain_result("❌ 图片下载失败，请到后台查看")
             return
 
-        save_media = self._api_client._to_bool(self.conf.get("save_media", False))
+        save_media = self._to_bool(self.conf.get("save_media", False))
 
         # 单张图片直接发送，多张使用合并转发
         if len(images_data) == 1:

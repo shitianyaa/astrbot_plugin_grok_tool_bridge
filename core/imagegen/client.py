@@ -358,10 +358,12 @@ class GrokImageClient:
 
         base_url = self._get_base_url()
         api_url = f"{base_url}/v1/images/generations"
-        configured_model = self._config.get("grok_image_model", "grok-imagine-1.0")
+        configured_model = self._config.get(
+            "grok_image_model", "grok-imagine-image-lite"
+        )
         model = await self._resolve_model(
             configured_model=configured_model,
-            fallback_models=["grok-imagine-1.0"],
+            fallback_models=["grok-imagine-image-lite"],
             scene="文生图",
         )
 
@@ -462,7 +464,7 @@ class GrokImageClient:
         configured_model = self._config.get("grok_edit_model", "grok-imagine-1.0-edit")
         model = await self._resolve_model(
             configured_model=configured_model,
-            fallback_models=["grok-imagine-1.0-edit", "grok-imagine-1.0"],
+            fallback_models=["grok-imagine-1.0-edit", "grok-imagine-image-lite"],
             scene="图生图",
         )
         resolved_size = target_size
