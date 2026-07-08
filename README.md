@@ -14,6 +14,7 @@
 - 定时文件：创建引用最近文件的 future_task 时保存稳定副本，避免 TTL 或重启后文件路径丢失。
 - 诊断命令：本地查看 provider、工具白名单、最近文件、主动任务状态，不调用外部模型。
 - 原生工具透传：为未来 Grok provider 稳定支持工具调用预留保守跳过模式。
+- 生图：内置 `/grok生图` 文生图 / 图生图（能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)）。
 
 默认自动工具白名单：
 
@@ -92,6 +93,28 @@ future_task 到点
 
 如果任务创建时引用了最近文件，插件会把文件复制到插件数据目录的 `scheduled_files`，并把稳定路径写进 future_task 的 note。到点后工具模型会读取这个稳定路径。
 
+## 生图
+
+`/grok生图` 独立于桥接逻辑，直接调用 Grok 生图 API（文生图 / 图生图）。使用前在配置里填写 `grok_api_key`（生图专用，与会话 Provider 独立）。
+
+```text
+/grok生图 [数量] [比例] 提示词 [+图片可选]
+```
+
+- 数量：1-10，默认 1（多张自动用合并转发发送）。
+- 比例：`1:1` / `2:3` / `3:2` / `9:16` / `16:9`，不传默认 `9:16` 竖屏。
+- 附带图片则走图生图，自动匹配原图比例；附带第二张图时作为局部重绘蒙版。
+
+示例：
+
+```text
+/grok生图 一只猫
+/grok生图 4 3:2 日落海滩
+/grok生图 把背景换成森林 +图片
+```
+
+相关配置：`grok_api_url`、`grok_api_key`、`grok_image_model`、`grok_edit_model`、`save_media`，以及 `user_whitelist` / `user_blacklist` / `group_whitelist` / `group_blacklist`（名单默认空即全放行）。
+
 ## 诊断命令
 
 诊断命令不会调用 LLM：
@@ -143,7 +166,7 @@ future_task 到点
 
 ```powershell
 python -m json.tool _conf_schema.json
-$files = @('main.py') + (Get-ChildItem core -Filter *.py | ForEach-Object { $_.FullName }); python -m py_compile $files
+$files = @('main.py') + (Get-ChildItem core -Recurse -Filter *.py | ForEach-Object { $_.FullName }); python -m py_compile $files
 python -m pytest -q
 ```
 
@@ -153,3 +176,7 @@ python -m pytest -q
 python -m ruff check .
 python -m ruff format --check .
 ```
+
+## 致谢
+
+- `/grok生图`（文生图 / 图生图）能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)（作者：沐沐沐倾）。感谢原作者的实现，本仓库在其基础上裁剪为生图专用并适配当前插件结构。

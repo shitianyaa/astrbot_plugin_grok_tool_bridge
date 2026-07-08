@@ -15,6 +15,7 @@ from astrbot.api.star import Context, Star, StarTools
 
 from .core.bridge_service import GrokToolBridgeService
 from .core.config_manager import ConfigManager
+from .core.imagegen import GrokImageCommand
 
 
 class HasFileAttachmentFilter(CustomFilter):
@@ -48,12 +49,14 @@ class GrokToolBridgePlugin(Star):
             self.config_manager,
             self.data_dir,
         )
+        self.image_command = GrokImageCommand(config, self.data_dir)
 
     async def initialize(self) -> None:
         logger.info("GrokToolBridgePlugin initialized")
 
     async def terminate(self) -> None:
         self.bridge_service.close()
+        await self.image_command.close()
         logger.info("GrokToolBridgePlugin terminated")
 
     @filter.custom_filter(HasFileAttachmentFilter, False, priority=200)
@@ -90,3 +93,9 @@ class GrokToolBridgePlugin(Star):
         event.stop_event()
         reply = await self.bridge_service.handle_manual_command(event, text)
         yield event.plain_result(reply)
+
+    @filter.command("grok生图", alias={"grokimage"}, prefix_optional=True)
+    async def grok_image(self, event: AstrMessageEvent):
+        """Grok 生图: /grok生图 [数量] [比例] <提示词> [+图片可选]"""
+        async for result in self.image_command.run(event):
+            yield result

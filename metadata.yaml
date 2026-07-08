@@ -1,7 +1,7 @@
 name: astrbot_plugin_grok_tool_bridge
 display_name: Grok 工具桥接
-desc: 为 Grok/xAI 等不稳定调用函数工具的模型提供 AstrBot 内置工具桥接
-version: v0.1.0
+desc: 为 Grok/xAI 等不稳定调用函数工具的模型提供 AstrBot 内置工具桥接，并内置 Grok 生图（文生图/图生图）
+version: v0.2.0
 author: Shitian
 repo: https://github.com/shitianyaa/astrbot_plugin_grok_tool_bridge
 astrbot_version: ">=4.16.0,<5"
