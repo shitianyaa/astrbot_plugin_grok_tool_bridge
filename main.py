@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from astrbot.core.config.astrbot_config import AstrBotConfig as CoreAstrBotConfig
 from astrbot.core.message.components import File, Reply
 from astrbot.core.message.message_event_result import MessageChain
@@ -81,6 +83,7 @@ class GrokToolBridgePlugin(Star):
         self,
         event: AstrMessageEvent,
         req: ProviderRequest,
+        *runtime_args: Any,
     ) -> None:
         """Intercept Grok LLM requests and run a JSON-planned tool bridge."""
         await self.bridge_service.handle_llm_request(event, req)
@@ -95,7 +98,12 @@ class GrokToolBridgePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("grok生图", alias={"grokimage"}, prefix_optional=True)
-    async def grok_image(self, event: AstrMessageEvent):
+    async def grok_image(
+        self,
+        event: AstrMessageEvent,
+        text: str = "",
+        runtime_arg: Any = None,
+    ):
         """Grok 生图: /grok生图 [数量] [比例] <提示词> [+图片可选]"""
         async for result in self.image_command.run(event):
             yield result
