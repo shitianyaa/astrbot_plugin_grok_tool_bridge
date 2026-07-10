@@ -59,9 +59,6 @@ class ErrorTranslator:
             if en_pattern.lower() in error_lower:
                 return zh_msg
 
-        if "invalid_size" in error_lower or "size must be" in error_lower:
-            return f"尺寸参数不合法: {raw_error}"
-
         if "invalid_resolution" in error_lower or "resolution_name" in error_lower:
             return f"视频分辨率参数不合法: {raw_error}"
 
@@ -97,21 +94,6 @@ class ErrorTranslator:
                     return part[:200]
 
         return raw_error[:200]
-
-    @staticmethod
-    def is_size_related_error(error_message: str | None) -> bool:
-        """判断是否是尺寸参数相关错误"""
-        if not error_message:
-            return False
-        err = error_message.lower()
-        if "invalid_size" in err or "size must be" in err:
-            return True
-        return "size" in err and (
-            "invalid" in err
-            or "unsupported" in err
-            or "unknown" in err
-            or "must be" in err
-        )
 
     @staticmethod
     def is_resolution_related_error(error_message: str | None) -> bool:

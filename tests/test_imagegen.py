@@ -69,6 +69,23 @@ def test_has_image_input_checks_direct_and_replied_images(tmp_path: Path):
     assert command._has_image_input(_EventWithSegments([])) is False
 
 
+def test_generation_payload_omits_size_and_aspect_ratio():
+    payload = GrokImageClient._build_generation_payload(
+        model="grok-imagine-image-lite",
+        prompt="16:9 日落海滩",
+        n=12,
+        response_format="url",
+    )
+    assert payload == {
+        "model": "grok-imagine-image-lite",
+        "prompt": "16:9 日落海滩",
+        "n": 10,
+        "response_format": "url",
+    }
+    assert "size" not in payload
+    assert "aspect_ratio" not in payload
+
+
 def test_parser_extracts_image_urls_and_b64():
     parser = ResponseParser()
     results = parser.parse_image_api_response(
