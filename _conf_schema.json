@@ -283,12 +283,6 @@
     "default": "grok-imagine-image-lite",
     "hint": "图像生成模型，默认 grok-imagine-image-lite。"
   },
-  "grok_edit_model": {
-    "description": "图生图模型",
-    "type": "string",
-    "default": "grok-imagine-1.0-edit",
-    "hint": "图像编辑模型，默认 grok-imagine-1.0-edit。"
-  },
   "save_media": {
     "description": "保存生成的图片",
     "type": "bool",

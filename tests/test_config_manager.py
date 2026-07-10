@@ -122,3 +122,4 @@ def test_conf_schema_stays_in_sync_with_runtime_defaults_and_ranges():
         "log_only",
     ]
     assert schema["recent_file_max_size_kb"]["slider"]["max"] == 102400
+    assert "grok_edit_model" not in schema

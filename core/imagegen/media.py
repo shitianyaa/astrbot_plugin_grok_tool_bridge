@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import mimetypes
 import os
 import time
@@ -17,7 +15,6 @@ from typing import Any
 
 import aiofiles
 import aiohttp
-from PIL import Image
 
 from astrbot.api import logger
 import astrbot.api.message_components as Comp
@@ -111,42 +108,7 @@ class MediaHandler:
             return "mp3"
         return "mp3"
 
-    @staticmethod
-    def get_image_resolution(image_bytes: bytes) -> tuple[int, int] | None:
-        """读取图片分辨率"""
-        try:
-            with Image.open(io.BytesIO(image_bytes)) as img:
-                width, height = img.size
-            if width <= 0 or height <= 0:
-                return None
-            return width, height
-        except Exception as e:
-            logger.warning(f"读取图片分辨率失败: {e}")
-            return None
-
-    @staticmethod
-    def is_segment_type(seg: Any, type_name: str) -> bool:
-        """兼容不同平台实现的消息段类型判断"""
-        cls = getattr(Comp, type_name, None)
-        if cls is not None:
-            try:
-                if isinstance(seg, cls):
-                    return True
-            except Exception:
-                pass
-        return seg.__class__.__name__.lower() == type_name.lower()
-
-    @staticmethod
-    def extract_segment_sources(seg: Any) -> list[str]:
-        """从消息段中提取资源 URL/路径"""
-        sources: list[str] = []
-        for key in ("file", "url", "path", "src"):
-            value = getattr(seg, key, None)
-            if isinstance(value, str) and value.strip():
-                sources.append(value.strip())
-        return list(dict.fromkeys(sources))
-
-    # ==================== 下载与加载 ====================
+    # ==================== 下载 ====================
 
     async def download_media(self, url: str) -> bytes | None:
         """下载媒体文件"""
@@ -163,26 +125,6 @@ class MediaHandler:
         except Exception as e:
             logger.error(f"媒体下载失败: {e}")
             return None
-
-    async def load_bytes(self, src: str) -> bytes | None:
-        """从各种来源加载字节数据"""
-        path = Path(src)
-        if path.is_file():
-            try:
-                async with aiofiles.open(src, "rb") as f:
-                    return await f.read()
-            except Exception as e:
-                logger.debug(f"读取本地文件失败 ({src[:50]}): {e}")
-                return None
-        elif src.startswith("http"):
-            return await self.download_media(src)
-        elif src.startswith("base64://"):
-            try:
-                return base64.b64decode(src[9:])
-            except Exception as e:
-                logger.debug(f"Base64解码失败: {e}")
-                return None
-        return None
 
     # ==================== 文件清理 ====================
 
