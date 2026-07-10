@@ -1,7 +1,7 @@
 """Grok 生图命令封装
 
 移植自 astrbot_plugin_grok_suite (作者: 沐沐沐倾) 的 on_image_request 流程，
-裁剪为文生图 / 图生图。
+裁剪为文生图。
 """
 
 from __future__ import annotations
@@ -21,14 +21,6 @@ from .permissions import PermissionChecker
 class GrokImageCommand:
     """封装 /grok生图 命令的完整流程"""
 
-    DEFAULT_TEXT_IMAGE_SIZE = "720x1280"
-    SIZE_TO_ASPECT_RATIO = {
-        "1280x720": "16:9",
-        "720x1280": "9:16",
-        "1792x1024": "3:2",
-        "1024x1792": "2:3",
-        "1024x1024": "1:1",
-    }
     MAX_IMAGE_COUNT = 10
     MAX_PROMPT_LENGTH = 4000
 
@@ -70,16 +62,6 @@ class GrokImageCommand:
                 pass
         return seg.__class__.__name__.lower() == type_name.lower()
 
-    @staticmethod
-    def _extract_segment_sources(seg: Any) -> list[str]:
-        """从消息段中提取资源 URL/路径"""
-        sources: list[str] = []
-        for key in ("file", "url", "path", "src"):
-            value = getattr(seg, key, None)
-            if isinstance(value, str) and value.strip():
-                sources.append(value.strip())
-        return list(dict.fromkeys(sources))
-
     def _iter_event_segments(self, event: Any) -> list[Any]:
         """展开消息链与引用链，返回统一的消息段列表"""
         message_list = (
@@ -94,89 +76,32 @@ class GrokImageCommand:
                 segments.append(seg)
         return segments
 
-    async def _load_segment_payload(self, seg: Any) -> tuple[bytes | None, str | None]:
-        """从消息段中读取媒体数据"""
-        direct_data = getattr(seg, "data", None)
-        if isinstance(direct_data, (bytes, bytearray)) and direct_data:
-            return bytes(direct_data), None
-
-        for src in self._extract_segment_sources(seg):
-            payload = await self._media_handler.load_bytes(src)
-            if payload:
-                return payload, src
-        return None, None
-
-    async def _get_images_from_event(
-        self, event: Any, max_count: int = 1
-    ) -> list[bytes]:
-        """从事件中获取图片"""
-        images: list[bytes] = []
-        if max_count <= 0:
-            return images
-
-        for seg in self._iter_event_segments(event):
-            if not self._is_segment_type(seg, "Image"):
-                continue
-            payload, _ = await self._load_segment_payload(seg)
-            if payload:
-                images.append(payload)
-                if len(images) >= max_count:
-                    break
-        return images
+    def _has_image_input(self, event: Any) -> bool:
+        """判断命令消息或引用消息中是否包含图片。"""
+        return any(
+            self._is_segment_type(seg, "Image")
+            for seg in self._iter_event_segments(event)
+        )
 
     # ==================== 参数解析 ====================
 
-    def _parse_image_params(
-        self, text: str, strict_size: bool = True
-    ) -> tuple[str, dict[str, Any]]:
-        """解析生图参数: [数量] [尺寸] 提示词（顺序任意）"""
-        params: dict[str, Any] = {
-            "n": 1,
-            "size": self.DEFAULT_TEXT_IMAGE_SIZE,
-            "invalid_size": None,
-        }
+    def _parse_image_params(self, text: str) -> tuple[str, dict[str, Any]]:
+        """解析生图参数，只消费开头的合法数量。"""
+        params: dict[str, Any] = {"n": 1}
         parts = text.split()
         if not parts:
             return "", params
 
-        prompt_start = 0
-        found_n = False
-        found_size = False
+        if parts[0].isdigit() and 1 <= int(parts[0]) <= self.MAX_IMAGE_COUNT:
+            params["n"] = int(parts[0])
+            parts = parts[1:]
 
-        for i in range(min(2, len(parts))):
-            p = parts[i]
-
-            if not found_n and p.isdigit() and 1 <= int(p) <= self.MAX_IMAGE_COUNT:
-                params["n"] = int(p)
-                prompt_start = i + 1
-                found_n = True
-            elif not found_size:
-                normalized = self._api_client._normalize_supported_size(p)
-                if normalized:
-                    params["size"] = normalized
-                    prompt_start = i + 1
-                    found_size = True
-                    continue
-
-                parsed_size = self._api_client._parse_size_string(p)
-                if parsed_size and strict_size:
-                    params["invalid_size"] = self._api_client._format_size(
-                        parsed_size[0], parsed_size[1]
-                    )
-                    prompt_start = i + 1
-                    found_size = True
-                    continue
-                break
-            else:
-                break
-
-        prompt = " ".join(parts[prompt_start:]).strip()
-        return prompt, params
+        return " ".join(parts).strip(), params
 
     # ==================== 主流程 ====================
 
     async def run(self, event: Any):
-        """Grok 生图: /grok生图 [数量] [尺寸] <提示词> [+图片可选]"""
+        """Grok 生图: /grok生图 [数量] 提示词"""
         # 权限检查前置
         can_proceed, _ = PermissionChecker.check_event_permissions(event, self.conf)
         if not can_proceed:
@@ -198,14 +123,11 @@ class GrokImageCommand:
             yield event.plain_result("❌ 请输入提示词\n示例: /grok生图 一只可爱的猫咪")
             return
 
-        image_inputs = await self._get_images_from_event(event, max_count=2)
-        image_bytes = image_inputs[0] if image_inputs else None
-        mask_bytes = image_inputs[1] if len(image_inputs) > 1 else None
-        mode = "图生图" if image_bytes else "文生图"
+        if self._has_image_input(event):
+            yield event.plain_result("❌ 暂不支持图生图，请移除图片后重试")
+            return
 
-        prompt_text, params = self._parse_image_params(
-            user_input, strict_size=not image_bytes
-        )
+        prompt_text, params = self._parse_image_params(user_input)
         if not prompt_text:
             yield event.plain_result("❌ 请输入提示词")
             return
@@ -218,45 +140,13 @@ class GrokImageCommand:
             )
 
         n = params["n"]
-        requested_size = params["size"]
-        invalid_size = params.get("invalid_size")
+        yield event.plain_result(f"🎨 正在进行 [文生图] · {n}张 ...")
 
-        if not image_bytes and invalid_size:
-            supported_ratios = "、".join(self.SIZE_TO_ASPECT_RATIO.values())
-            yield event.plain_result(
-                f"❌ 不支持的尺寸: {invalid_size}\n支持比例: {supported_ratios}"
-            )
-            return
-
-        target_size = None
-        if image_bytes:
-            source_resolution = self._media_handler.get_image_resolution(image_bytes)
-            if source_resolution:
-                target_size = self._api_client._get_closest_supported_size(
-                    *source_resolution
-                )
-        else:
-            target_size = requested_size
-
-        if not target_size:
-            target_size = self.DEFAULT_TEXT_IMAGE_SIZE
-
-        aspect_ratio_display = self._api_client._get_aspect_ratio_display(target_size)
-        yield event.plain_result(
-            f"🎨 正在进行 [{mode}] · {n}张 · {aspect_ratio_display} ..."
-        )
-
-        results, error = await self._api_client.generate_image(
-            prompt_text,
-            image_bytes,
-            mask_bytes=mask_bytes,
-            n=n,
-            target_size=target_size,
-        )
+        results, error = await self._api_client.generate_image(prompt_text, n=n)
 
         if error:
             yield event.plain_result(
-                f"❌ [{mode}] 生成失败: {self._error_translator.translate(error)}"
+                f"❌ [文生图] 生成失败: {self._error_translator.translate(error)}"
             )
             return
 
@@ -295,4 +185,4 @@ class GrokImageCommand:
             ):
                 yield result
 
-        logger.debug(f"[grok生图] 已发送 {len(images_data)} 张图片，模式={mode}")
+        logger.debug(f"[grok生图] 已发送 {len(images_data)} 张图片，模式=文生图")

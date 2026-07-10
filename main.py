@@ -104,6 +104,6 @@ class GrokToolBridgePlugin(Star):
         text: str = "",
         runtime_arg: Any = None,
     ):
-        """Grok 生图: /grok生图 [数量] [比例] <提示词> [+图片可选]"""
+        """Grok 生图: /grok生图 [数量] 提示词"""
         async for result in self.image_command.run(event):
             yield result
