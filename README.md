@@ -14,7 +14,7 @@
 - 定时文件：创建引用最近文件的 future_task 时保存稳定副本，避免 TTL 或重启后文件路径丢失。
 - 诊断命令：本地查看 provider、工具白名单、最近文件、主动任务状态，不调用外部模型。
 - 原生工具透传：为未来 Grok provider 稳定支持工具调用预留保守跳过模式。
-- 生图：内置 `/grok生图` 文生图 / 图生图（能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)）。
+- 生图：内置 `/grok生图` 文生图（能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)）。
 
 默认自动工具白名单：
 
@@ -95,25 +95,25 @@ future_task 到点
 
 ## 生图
 
-`/grok生图` 独立于桥接逻辑，直接调用 Grok 生图 API（文生图 / 图生图）。使用前在配置里填写 `grok_api_key`（生图专用，与会话 Provider 独立）。
+`/grok生图` 独立于桥接逻辑，直接调用 Grok 文生图 API。使用前在配置里填写 `grok_api_key`（生图专用，与会话 Provider 独立）。
 
 ```text
-/grok生图 [数量] [比例] 提示词 [+图片可选]
+/grok生图 [数量] 提示词
 ```
 
 - 数量：1-10，默认 1（多张自动用合并转发发送）。
-- 比例：`1:1` / `2:3` / `3:2` / `9:16` / `16:9`，不传默认 `9:16` 竖屏。
-- 附带图片则走图生图，自动匹配原图比例；附带第二张图时作为局部重绘蒙版。
+- 比例描述属于提示词正文，例如 `16:9`、`7:5` 或“画面比例三比二”都会原样交给模型；插件不会强制默认比例，也不会发送结构化尺寸参数。
+- 暂不支持图生图；命令或引用消息中包含图片时会明确提示并停止请求。
 
 示例：
 
 ```text
 /grok生图 一只猫
 /grok生图 4 3:2 日落海滩
-/grok生图 把背景换成森林 +图片
+/grok生图 电影感城市夜景，画面比例 16:9
 ```
 
-相关配置：`grok_api_url`、`grok_api_key`、`grok_image_model`、`grok_edit_model`、`save_media`，以及 `user_whitelist` / `user_blacklist` / `group_whitelist` / `group_blacklist`（名单默认空即全放行）。
+相关配置：`grok_api_url`、`grok_api_key`、`grok_image_model`、`save_media`，以及 `user_whitelist` / `user_blacklist` / `group_whitelist` / `group_blacklist`（名单默认空即全放行）。
 
 ## 诊断命令
 
@@ -179,4 +179,4 @@ python -m ruff format --check .
 
 ## 致谢
 
-- `/grok生图`（文生图 / 图生图）能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)（作者：沐沐沐倾）。感谢原作者的实现，本仓库在其基础上裁剪为生图专用并适配当前插件结构。
+- `/grok生图` 文生图能力移植自 [astrbot_plugin_grok_suite](https://github.com/muqing-kg/astrbot_plugin_grok_suite)（作者：沐沐沐倾）。感谢原作者的实现，本仓库在其基础上裁剪为文生图专用并适配当前插件结构。

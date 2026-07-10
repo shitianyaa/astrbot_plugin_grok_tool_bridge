@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1
+
+- Simplified `/grok生图` to text-to-image only and removed the unavailable
+  image-to-image, mask, and edit-model paths.
+- Parse only an optional leading image count; ratio-like text now remains in
+  the prompt and no `size` or `aspect_ratio` field is forced.
+- Reject attached images with a clear unsupported message and remove the
+  unused Pillow dependency.
+
 ## v0.2.0
 
 - Added `/grok生图` image generation (text-to-image and image-to-image),
